@@ -1,13 +1,15 @@
 import sys
+import os
+
+# Ensure we are running from project root
+sys.path.append(os.getcwd())
+
 from rich.console import Console
 
-# Import our new core class
-# If this fails, it means the folder structure or __init__.py files are missing
 try:
     from source.avicenna.core import AvicennaAgent
 except ImportError as e:
     print(f"❌ Import Error: {e}")
-    print("Ensure you are running this from the root 'avicenna-agent' directory.")
     sys.exit(1)
 
 console = Console()
@@ -18,7 +20,6 @@ def test_integration():
     # 1. Test Configuration Loading
     console.print("\n[bold yellow]Step 1: Initializing Agent...[/bold yellow]")
     try:
-        # This triggers Config.validate() automatically
         agent = AvicennaAgent() 
         console.print("[green]✅ Configuration loaded & Agent initialized.[/green]")
     except Exception as e:
@@ -33,7 +34,11 @@ def test_integration():
         
         response = agent.send_message(user_query)
         
-        if response:
+        # Check if the response contains the error keywords defined in core.py
+        if "encountered an error" in response:
+             console.print(f"\n[cyan]🤖 Avicenna says:[/cyan]\n{response}")
+             console.print("\n[bold red]❌ TEST FAILED: The agent handled the error, but the API call failed.[/bold red]")
+        elif response:
             console.print(f"\n[cyan]🤖 Avicenna says:[/cyan]\n{response}")
             console.print("\n[bold green]✅ SUCCESS: The core system is fully operational.[/bold green]")
         else:
