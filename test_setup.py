@@ -29,17 +29,17 @@ def test_integration():
     # 2. Test Gemini Connection
     console.print("\n[bold yellow]Step 2: Testing Neural Link (API Call)...[/bold yellow]")
     try:
-        user_query = "Hello Avicenna. Are you online? Reply with a short confirmation."
+        user_query = "Hello. Reply with 'OK'."
         console.print(f"[dim]Sending: {user_query}[/dim]")
         
         response = agent.send_message(user_query)
         
-        # Check if the response contains the error keywords defined in core.py
-        if "encountered an error" in response:
-             console.print(f"\n[cyan]🤖 Avicenna says:[/cyan]\n{response}")
-             console.print("\n[bold red]❌ TEST FAILED: The agent handled the error, but the API call failed.[/bold red]")
+        console.print(f"\n[cyan]🤖 Avicenna says:[/cyan]\n{response}")
+
+        # STRICTER CHECK: Fail if we see "Error" or specific error codes
+        if "Error" in response or "404" in response or "429" in response:
+             console.print("\n[bold red]❌ TEST FAILED: The agent returned an API error.[/bold red]")
         elif response:
-            console.print(f"\n[cyan]🤖 Avicenna says:[/cyan]\n{response}")
             console.print("\n[bold green]✅ SUCCESS: The core system is fully operational.[/bold green]")
         else:
             console.print("[red]❌ Error: Received empty response.[/red]")
