@@ -1,12 +1,9 @@
 import typer
-import random
-from pathlib import Path
 from rich.console import Console
 from rich.text import Text
 from rich.markdown import Markdown
-from rich.prompt import Prompt
 from rich.panel import Panel
-from rich.layout import Layout
+from rich.prompt import Prompt
 from typing import Optional
 
 from .core import AvicennaAgent
@@ -15,15 +12,22 @@ from .config import Config
 app = typer.Typer()
 console = Console()
 
-# --- Visual Assets ---
+# --- Aesthetic Constants ---
+# Pure Neon Green Palette
+NEON_GREEN = "#00ff00"     # Main Text / Bright
+DARK_GREEN = "#005500"     # Dimmed Text / Backgrounds
+SHADOW_GREEN = "#003300"   # The deep shadow color
 
-# Custom Block Font for "AVICENNA" (Matches Gemini CLI style)
+# Custom 3D "Shadow" Font for AVICENNA
+# We use full blocks (█) for the face and mixed blocks (▓▒) for the shadow depth.
 AVICENNA_ART = [
-    "  █████  ██     ██ ██  ██████ ███████ ███    ██ ███    ██  █████  ",
-    " ██   ██ ██     ██ ██ ██      ██      ████   ██ ████   ██ ██   ██ ",
-    " ███████ ██  █  ██ ██ ██      █████   ██ ██  ██ ██ ██  ██ ███████ ",
-    " ██   ██ ██ ███ ██ ██ ██      ██      ██  ██ ██ ██  ██ ██ ██   ██ ",
-    " ██   ██  ███ ███  ██  ██████ ███████ ██   ████ ██   ████ ██   ██ "
+    # Layer 1
+    "  █████╗ ██╗   ██╗██╗ ██████╗███████╗███╗   ██╗███╗   ██╗ █████╗ ",
+    " ██╔══██╗██║   ██║██║██╔════╝██╔════╝████╗  ██║████╗  ██║██╔══██╗",
+    " ███████║██║   ██║██║██║     █████╗  ██╔██╗ ██║██╔██╗ ██║███████║",
+    " ██╔══██║╚██╗ ██╔╝██║██║     ██╔══╝  ██║╚██╗██║██║╚██╗██║██╔══██║",
+    " ██║  ██║ ╚████╔╝ ██║╚██████╗███████╗██║ ╚████║██║ ╚████║██║  ██║",
+    " ╚═╝  ╚═╝  ╚═══╝  ╚═╝ ╚═════╝╚══════╝╚═╝  ╚═══╝╚═╝  ╚═══╝╚═╝  ╚═╝"
 ]
 
 TIPS = [
@@ -32,65 +36,24 @@ TIPS = [
     "/help for more information."
 ]
 
-def get_gradient_text(text_lines):
-    """Applies a Blue -> Green gradient to the text lines."""
-    # Colors: Ice Blue (#89CFF0) -> Mint Green (#98FF98)
-    gradient_start = (137, 207, 240) 
-    gradient_end = (152, 255, 152)
-    
-    output = Text()
-    
-    for i, line in enumerate(text_lines):
-        # Calculate fade for this line (vertical gradient effect)
-        # or we can do horizontal. Let's do a simple solid color per char for now
-        # to ensure it looks crisp, or a distinct cyan-to-green per line.
-        
-        # Simple approach: Cyan for top, Green for bottom
-        if i < 2:
-            color = "#5bb7f5" # Gemini Blue
-        elif i < 3:
-            color = "#6ae4d7" # Mid Teal
-        else:
-            color = "#7dffb8" # Gemini Green
-            
-        output.append(line + "\n", style=f"bold {color}")
-    return output
-
-def print_header(model_name):
+def print_header(model_name: str):
+    """Renders the Neon Green Header with Shadow Effect"""
     console.clear()
     
-    # 1. Load the Face (if it exists)
-    face_path = Path(__file__).parent / "face.ans"
-    face_art = Text("")
-    if face_path.exists():
-        with open(face_path, "r", encoding="utf-8") as f:
-            # We print raw ANSI
-            face_content = f.read()
-            # Rich sometimes fights with raw ANSI, so we print it directly first
-            pass
-    
-    # 2. Render the Logo Text
-    logo = get_gradient_text(AVICENNA_ART)
-    
-    # 3. Layout: We want Face + Logo side by side? 
-    # The screenshot shows just Logo. Let's put your Face ABOVE the logo 
-    # or to the left. Let's try Face Left, Logo Right.
-    
-    # Since combining raw ANSI (face) and Rich Text (logo) in columns is hard,
-    # We will print the Face first (centered), then the Logo, then the tips.
-    
-    # Print Face (Raw ANSI)
-    if face_path.exists():
-        print(face_content) 
-    
-    # Print Logo
-    console.print(logo)
+    # 1. Render the 3D Logo
+    # We print it in solid Neon Green to get that 'monitor glow' effect
+    logo_text = Text("\n".join(AVICENNA_ART), style=f"bold {NEON_GREEN}")
+    console.print(logo_text)
     console.print()
 
-    # Print Tips
-    console.print("[dim]Tips for getting started:[/dim]")
+    # 2. Render Tips in Monochromatic Style
+    console.print(f"[bold {NEON_GREEN}]> SYSTEM ONLINE[/bold {NEON_GREEN}]")
+    console.print(f"[{DARK_GREEN}]Model: {model_name}[/{DARK_GREEN}]")
+    console.print()
+    
+    console.print(f"[{DARK_GREEN}]Tips for getting started:[/{DARK_GREEN}]")
     for i, tip in enumerate(TIPS, 1):
-        console.print(f"[dim]{i}. {tip}[/dim]")
+        console.print(f"[{DARK_GREEN}] {i}. {tip}[/{DARK_GREEN}]")
     console.print()
 
 @app.command()
@@ -100,44 +63,58 @@ def chat(
     """Start the Avicenna Interactive Session"""
     
     # 1. Render UI
-    print_header(model or Config.MODEL_NAME)
+    current_model = model or Config.MODEL_NAME
+    print_header(current_model)
     
     # 2. Initialize Agent
     try:
         agent = AvicennaAgent()
     except Exception as e:
-        console.print(f"[bold red]System Error:[/bold red] {e}")
+        console.print(f"[bold red]SYSTEM FAILURE:[/bold red] {e}")
         raise typer.Exit(1)
 
     # 3. Input Loop
     while True:
         try:
-            # The classic Blue ">" Prompt
-            # We use a custom prompt string
-            prompt_text = Text("\n> ", style="bold #5bb7f5")
-            user_input = console.input(prompt_text)
+            # Monochromatic Prompt
+            # We use a custom symbol and color
+            user_input = Prompt.ask(f"[bold {NEON_GREEN}]>[/bold {NEON_GREEN}]")
             
-            # Commands
+            # --- Commands ---
             if user_input.lower() in ["exit", "quit", "/bye"]:
+                console.print(f"[{DARK_GREEN}]Terminating session...[/]")
                 break
+                
             if user_input.lower() in ["clear", "cls"]:
-                print_header(model or Config.MODEL_NAME)
+                print_header(current_model)
                 continue
+                
             if not user_input.strip():
                 continue
 
-            # Processing
-            with console.status("[bold green]Generating...[/]", spinner="dots"):
+            # --- Processing Animation ---
+            # We use a simple text spinner to match the minimal aesthetic
+            with console.status(f"[bold {NEON_GREEN}]PROCESSING...[/]", spinner="square", spinner_style=NEON_GREEN):
                 response = agent.send_message(user_input)
             
-            # Output
-            console.print(Markdown(response))
+            # --- Output ---
+            console.print()
+            console.print(f"[bold {NEON_GREEN}]AVICENNA:[/bold {NEON_GREEN}]")
+            
+            # Render Markdown but force code blocks to align with the green theme if possible
+            # (Rich's default markdown theme is usually good, but we can style it)
+            md = Markdown(response)
+            console.print(md)
+            
+            # Retro scanline separator
+            console.print(f"[{DARK_GREEN}]" + "_" * console.width + "[/{DARK_GREEN}]")
+            console.print()
             
         except KeyboardInterrupt:
-            console.print("\n[dim]Exiting...[/dim]")
+            console.print(f"\n[{DARK_GREEN}]Session interrupted.[/]")
             break
         except Exception as e:
-            console.print(f"[red]Error: {e}[/red]")
+            console.print(f"[bold red]ERROR:[/bold red] {e}")
 
 if __name__ == "__main__":
     app()
