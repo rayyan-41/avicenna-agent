@@ -1,0 +1,52 @@
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+from rich.console import Console
+
+# Initialize Rich console for pretty error messages
+console = Console()
+
+# 1. Resolve the Project Root Directory
+# We use Path(__file__) to find *this* file's location, then go up 3 levels:
+# src/avicenna/config.py -> src/avicenna -> src -> ROOT
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
+# 2. Load Environment Variables
+# We explicitly point to the .env file in the root directory.
+# This ensures it works even if you run the script from a different folder.
+env_path = BASE_DIR / ".env"
+load_dotenv(env_path)
+
+class Config:
+    """
+    Central configuration class.
+    All application settings should be accessed via this class,
+    never by calling os.getenv() directly in other files.
+    """
+    
+    # The Google API Key for Gemini
+    API_KEY = os.getenv("GOOGLE_API_KEY")
+    
+    # The Model Name
+    # We default to 'gemini-2.0-flash-exp' for speed during development.
+    # You can change this in your .env file without touching code.
+    MODEL_NAME = os.getenv("AVICENNA_MODEL", "gemini-2.0-flash-exp")
+    
+    @classmethod
+    def validate(cls):
+        """
+        Verifies that critical configuration is present.
+        Returns False if the API key is missing, stopping the app early.
+        """
+        if not cls.API_KEY:
+            console.print("[bold red]❌ CRITICAL ERROR: GOOGLE_API_KEY not found.[/bold red]")
+            console.print(f"[yellow]   Expected .env location:[/yellow] {env_path}")
+            console.print("[dim]   Please create the .env file with your API key.[/dim]")
+            return False
+        return True
+
+# 3. Import-time Check
+# This runs as soon as this file is imported anywhere.
+# It gives immediate feedback if the key is missing.
+if not Config.API_KEY:
+    console.print("[yellow]⚠️  Warning: Config loaded but API Key is missing.[/yellow]")

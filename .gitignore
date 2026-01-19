@@ -1,0 +1,24 @@
+#--- Security (CRITICAL) ---
+.env
+.env.local
+
+#--- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+
+#--- Virtual Environment ---
+venv/
+env/
+
+#--- IDE Settings ---
+.vscode/
+.idea/
+
+#--- OS Generated ---
+.DS_Store
+Thumbs.db
+
+#--- Logs ---
+logs/
+*.log
