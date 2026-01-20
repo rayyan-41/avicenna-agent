@@ -12,3 +12,6 @@ source/avicenna/core.py
 source/avicenna/main.py
 source/avicenna/providers/__init__.py
 source/avicenna/providers/gemini.py
+source/tools/__init__.py
+source/tools/base.py
+source/tools/basic.py

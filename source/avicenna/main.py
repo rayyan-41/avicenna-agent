@@ -3,7 +3,7 @@ from rich.console import Console
 from rich.text import Text
 from rich.markdown import Markdown
 from rich.prompt import Prompt
-from rich.markup import escape  # <--- CRITICAL IMPORT
+from rich.markup import escape  
 from typing import Optional
 
 from .core import AvicennaAgent
@@ -25,9 +25,8 @@ AVICENNA_ART = [
 ]
 
 TIPS = [
-    "Ask questions, edit files, or run commands.",
-    "Be specific for the best results.",
-    "/help for more information."
+    "Version 0.1 beta",
+    "Type 'exit' or 'quit' to end the session",
 ]
 
 def print_header(model_name: str):
@@ -39,8 +38,8 @@ def print_header(model_name: str):
     console.print(f"[{DARK_GREEN}]Model: {model_name}[/]") 
     console.print()
     console.print(f"[{DARK_GREEN}]Tips for getting started:[/]")
-    for i, tip in enumerate(TIPS, 1):
-        console.print(f"[{DARK_GREEN}] {i}. {tip}[/]")
+    for tip in TIPS:
+        console.print(f"[{DARK_GREEN}] {tip}[/]")
     console.print()
 
 @app.command()

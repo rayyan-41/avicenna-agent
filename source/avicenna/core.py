@@ -1,6 +1,7 @@
 from rich.console import Console
 from .config import Config
 from .providers.gemini import GeminiProvider
+from ..tools.basic import BASIC_TOOLS
 
 console = Console()
 
@@ -23,7 +24,8 @@ class AvicennaAgent:
         self.ai = GeminiProvider(
             api_key=Config.API_KEY,
             model_name=Config.MODEL_NAME,
-            system_instruction=self.system_instruction
+            system_instruction=self.system_instruction,
+            tools=BASIC_TOOLS
         )
         
         console.print(f" [green]✓ Connected[/green]")
