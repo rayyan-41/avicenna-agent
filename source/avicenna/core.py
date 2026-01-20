@@ -18,13 +18,15 @@ class AvicennaAgent:
         # Here we decide which brain to load based on Config.
         # Later, we can add: if Config.PROVIDER == "claude": ...
         
-        console.print(f"[dim]🔌 Connecting to {Config.MODEL_NAME}...[/dim]")
+        console.print(f"[dim]🔌 Connecting to {Config.MODEL_NAME}...[/dim]", end="")
         
         self.ai = GeminiProvider(
             api_key=Config.API_KEY,
             model_name=Config.MODEL_NAME,
             system_instruction=self.system_instruction
         )
+        
+        console.print(f" [green]✓ Connected[/green]")
         
     def send_message(self, user_input: str) -> str:
         # We delegate the work to the loaded provider
