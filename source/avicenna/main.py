@@ -31,9 +31,8 @@ AVICENNA_ART = [
 ]
 
 TIPS = [
-    "Ask questions, edit files, or run commands.",
-    "Be specific for the best results.",
-    "/help for more information."
+    "Version 0.1 beta",
+    "Work in progress",
 ]
 
 def print_header(model_name: str):
@@ -51,9 +50,9 @@ def print_header(model_name: str):
     console.print(f"[{DARK_GREEN}]Model: {model_name}[/{DARK_GREEN}]")
     console.print()
     
-    console.print(f"[{DARK_GREEN}]Tips for getting started:[/{DARK_GREEN}]")
+    console.print(f"[{DARK_GREEN}]Information:[/{DARK_GREEN}]")
     for i, tip in enumerate(TIPS, 1):
-        console.print(f"[{DARK_GREEN}] {i}. {tip}[/{DARK_GREEN}]")
+        console.print(f"[{DARK_GREEN}] {tip}[/{DARK_GREEN}]")
     console.print()
 
 @app.command()
@@ -94,7 +93,7 @@ def chat(
 
             # --- Processing Animation ---
             # We use a simple text spinner to match the minimal aesthetic
-            with console.status(f"[bold {NEON_GREEN}]PROCESSING...[/]", spinner="square", spinner_style=NEON_GREEN):
+            with console.status(f"[bold {NEON_GREEN}]PROCESSING...[/]", spinner="dots", spinner_style=NEON_GREEN):                
                 response = agent.send_message(user_input)
             
             # --- Output ---
