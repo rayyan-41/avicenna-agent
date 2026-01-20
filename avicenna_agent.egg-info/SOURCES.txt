@@ -1,0 +1,14 @@
+pyproject.toml
+avicenna_agent.egg-info/PKG-INFO
+avicenna_agent.egg-info/SOURCES.txt
+avicenna_agent.egg-info/dependency_links.txt
+avicenna_agent.egg-info/entry_points.txt
+avicenna_agent.egg-info/requires.txt
+avicenna_agent.egg-info/top_level.txt
+source/__init__.py
+source/avicenna/__init__.py
+source/avicenna/config.py
+source/avicenna/core.py
+source/avicenna/main.py
+source/avicenna/providers/__init__.py
+source/avicenna/providers/gemini.py
