@@ -62,7 +62,7 @@ def chat(
             user_input = Prompt.ask(f"[bold {NEON_GREEN}]>[/bold {NEON_GREEN}]")
             
             if user_input.lower() in ["exit", "quit", "/bye"]:
-                console.print(f"[{DARK_GREEN}]Terminating session...[/]")
+                console.print(f"[{DARK_GREEN}]The intellect is only acquired in order to know things unknown...[/]")
                 break
             if user_input.lower() in ["clear", "cls"]:
                 print_header(current_model)
