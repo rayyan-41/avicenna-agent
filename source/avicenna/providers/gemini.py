@@ -23,37 +23,40 @@ class GeminiProvider(LLMProvider):
         self.model_name = model_name
         
         # 1. Initialize Tools
-        self.tools = tools or []
+        # Extract actual functions from Tool objects for Gemini SDK
+        tool_functions = []
+        self.tool_map = {}
+        
+        # Process basic tools (Tool objects)
+        for tool in (tools or []):
+            if hasattr(tool, 'func') and hasattr(tool, 'name'):
+                # It's a Tool object - extract the function
+                func = tool.func
+                tool_functions.append(func)
+                self.tool_map[tool.name] = func
+        
+        # Add Gmail tools
         try:
             self.gmail = GmailTool()
-            # Register both draft and send functions for the model
-            self.tools.append(self.gmail.draft_email)
-            self.tools.append(self.gmail.send_email)
+            # Add both draft and send as raw functions
+            tool_functions.append(self.gmail.draft_email)
+            tool_functions.append(self.gmail.send_email)
+            self.tool_map['draft_email'] = self.gmail.draft_email
+            self.tool_map['send_email'] = self.gmail.send_email
         except Exception as e:
             print(f"⚠️ Warning: Gmail tool failed to load: {e}")
 
         # 2. Configure Chat with Tools
-        # We pass the tools list to the config so Gemini knows they exist.
+        # Pass the actual Python functions to Gemini
         self.config = types.GenerateContentConfig(
             system_instruction=system_instruction,
             temperature=0.7,
-            tools=self.tools,  # <--- The Critical Link
-            # Disable automatic function calling so we can see the results
+            tools=tool_functions,  # Pass raw functions
+            # Disable automatic function calling so we can handle it manually
             automatic_function_calling=types.AutomaticFunctionCallingConfig(
                 disable=True
             )
         )
-        
-        # Create a tool map for manual function execution
-        self.tool_map = {}
-        for tool in self.tools:
-            # Handle both Tool objects and raw functions
-            if hasattr(tool, 'name'):
-                # It's a Tool object
-                self.tool_map[tool.name] = tool.func if hasattr(tool, 'func') else tool
-            elif hasattr(tool, '__name__'):
-                # It's a raw function
-                self.tool_map[tool.__name__] = tool
         
         # Initialize chat history
         self.chat = self.client.chats.create(
@@ -126,7 +129,11 @@ class GeminiProvider(LLMProvider):
                                         logger.error(f"Function execution error: {e}")
                                         return f"⚠️ Error executing function '{function_name}': {str(e)}"
                                     
-                                    # Send the function result back to the model
+                                    # For draft_email, return the result directly (it's already formatted for display)
+                                    if function_name == 'draft_email':
+                                        return result
+                                    
+                                    # For other functions, send the result back to the model
                                     function_response = self.chat.send_message(
                                         types.Part.from_function_response(
                                             name=function_name,

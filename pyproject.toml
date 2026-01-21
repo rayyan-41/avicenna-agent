@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "avicenna-agent"
-version = "0.1.0"
+version = "1.0.0"
 description = "Avicenna: AI Agent with MCP Integration"
 requires-python = ">=3.9"
 dependencies = [

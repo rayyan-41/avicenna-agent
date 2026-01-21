@@ -25,7 +25,7 @@ AVICENNA_ART = [
 ]
 
 TIPS = [
-    "Version 0.2",
+    "Version 1.0",
     "Type 'exit' or 'quit' to end the session",
     "Latest features: Gmail integration!",
 ]
@@ -54,7 +54,7 @@ def chat(
         agent = AvicennaAgent()
     except Exception as e:
         # SAFETY FIX 1: Escape the error message
-        console.print(f"[bold red]SYSTEM FAILURE:[/bold red] {escape(str(e))}")
+        console.print(f"[bold {NEON_GREEN}]SYSTEM FAILURE:[/bold {NEON_GREEN}] {escape(str(e))}")
         raise typer.Exit(1)
 
     while True:
@@ -79,21 +79,24 @@ def chat(
             # SAFETY FIX: Wrap Markdown in try-except to catch markup errors
             # If Markdown parsing fails, fall back to escaped plain text
             try:
-                console.print(Markdown(response))
+                # Render markdown with green text
+                md = Markdown(response)
+                md.style = NEON_GREEN
+                console.print(md, style=NEON_GREEN)
             except Exception as markup_error:
                 # Fallback: print as escaped text if Markdown fails
-                console.print(escape(response))
+                console.print(f"[{NEON_GREEN}]{escape(response)}[/]")
             
             # SAFETY FIX 2: Use [/] to close the color tag, NOT [/{DARK_GREEN}]
             console.print(f"[{DARK_GREEN}]" + "_" * console.width + "[/]") 
             console.print()
             
         except KeyboardInterrupt:
-            console.print(f"\n[{DARK_GREEN}]Session interrupted.[/]")
+            console.print(f"\n[{NEON_GREEN}]Session interrupted.[/]")
             break
         except Exception as e:
             # SAFETY FIX 3: Escape the error message here too
-            console.print(f"[bold red]ERROR:[/bold red] {escape(str(e))}")
+            console.print(f"[bold {NEON_GREEN}]ERROR:[/bold {NEON_GREEN}] {escape(str(e))}")
 
 if __name__ == "__main__":
     app()
