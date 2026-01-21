@@ -1,6 +1,8 @@
 #--- Security (CRITICAL) ---
 .env
 .env.local
+credentials.json
+token.json
 
 #--- Python ---
 __pycache__/
