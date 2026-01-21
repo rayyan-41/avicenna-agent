@@ -46,13 +46,22 @@ class GeminiProvider(LLMProvider):
             # New SDK call format
             response = self.chat.send_message(message)
             
-            # If the model used a tool, the SDK executes it automatically
-            # and returns the final text response here.
+            # Handle different response scenarios
             if response.text:
                 return response.text
-            else:
-                # Fallback if response is purely functional (rare with auto-execution)
-                return "✅ Action completed."
+            elif hasattr(response, 'candidates') and response.candidates:
+                # Try to extract content from candidates
+                candidate = response.candidates[0]
+                if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                    parts_text = []
+                    for part in candidate.content.parts:
+                        if hasattr(part, 'text') and part.text:
+                            parts_text.append(part.text)
+                    if parts_text:
+                        return ''.join(parts_text)
+            
+            # If we still have no text, return a debug message
+            return f"⚠️ Empty response received. Response type: {type(response).__name__}"
                 
         except Exception as e:
             error_msg = str(e)
