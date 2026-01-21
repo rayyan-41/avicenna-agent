@@ -59,14 +59,9 @@ class GmailTool:
         # Build the Gmail service
         self.service = build('gmail', 'v1', credentials=self.creds)
         
-        # Get sender email from authenticated user profile
-        try:
-            profile = self.service.users().getProfile(userId='me').execute()
-            self.sender_email = profile['emailAddress']
-        except Exception as e:
-            # Fallback: will be set to 'me' in email sending
-            self.sender_email = 'me'
-            print(f"⚠️ Warning: Could not fetch sender email: {e}")
+        # Use 'me' as sender - Gmail API will automatically resolve to authenticated email
+        # This avoids requiring additional scopes just to fetch the profile
+        self.sender_email = 'me'
 
     def draft_email(self, recipient_email: str, subject: str, body: str) -> str:
         """
@@ -78,11 +73,11 @@ class GmailTool:
             body: The content of the email.
         """
         # Add watermark to the email body
-        watermark = f"\n\n---\nThis email was sent by Avicenna AI Agent through an automation process. Sender: {self.sender_email}"
+        watermark = "\n\n---\nThis email was sent by Avicenna AI Agent through an automation process."
         full_body = body + watermark
         
-        # Get sender email from authenticated user
-        sender_email = self.sender_email
+        # Gmail API resolves 'me' to authenticated user's email automatically
+        sender_email = "your authenticated Gmail account"
         
         # Escape body for JSON display
         body_display = body.replace('"', '\\"').replace('\n', '\\n')
@@ -118,7 +113,7 @@ class GmailTool:
         """
         try:
             # Add watermark to the email body
-            watermark = f"\n\n---\nThis email was sent by Avicenna AI Agent through an automation process. Sender: {self.sender_email}"
+            watermark = "\n\n---\nThis email was sent by Avicenna AI Agent through an automation process."
             full_body = body + watermark
             
             message = EmailMessage()
