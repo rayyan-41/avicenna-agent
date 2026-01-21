@@ -25,8 +25,9 @@ AVICENNA_ART = [
 ]
 
 TIPS = [
-    "Version 0.1 beta",
+    "Version 0.2",
     "Type 'exit' or 'quit' to end the session",
+    "Latest features: Gmail integration!",
 ]
 
 def print_header(model_name: str):
@@ -37,7 +38,7 @@ def print_header(model_name: str):
     console.print(f"[bold {NEON_GREEN}]> SYSTEM ONLINE[/bold {NEON_GREEN}]")
     console.print(f"[{DARK_GREEN}]Model: {model_name}[/]") 
     console.print()
-    console.print(f"[{DARK_GREEN}]Tips for getting started:[/]")
+    console.print(f"[{DARK_GREEN}]Meta:[/]")
     for tip in TIPS:
         console.print(f"[{DARK_GREEN}] {tip}[/]")
     console.print()
