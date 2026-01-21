@@ -18,7 +18,8 @@ class GeminiProvider(LLMProvider):
         self.tools = tools or []
         try:
             self.gmail = GmailTool()
-            # Register the function implementation for the model
+            # Register both draft and send functions for the model
+            self.tools.append(self.gmail.draft_email)
             self.tools.append(self.gmail.send_email)
         except Exception as e:
             print(f"⚠️ Warning: Gmail tool failed to load: {e}")
@@ -29,11 +30,22 @@ class GeminiProvider(LLMProvider):
             system_instruction=system_instruction,
             temperature=0.7,
             tools=self.tools,  # <--- The Critical Link
+            # Disable automatic function calling so we can see the results
             automatic_function_calling=types.AutomaticFunctionCallingConfig(
-                disable=False, 
-                maximum_remote_calls=3
+                disable=True
             )
         )
+        
+        # Create a tool map for manual function execution
+        self.tool_map = {}
+        for tool in self.tools:
+            # Handle both Tool objects and raw functions
+            if hasattr(tool, 'name'):
+                # It's a Tool object
+                self.tool_map[tool.name] = tool.func if hasattr(tool, 'func') else tool
+            elif hasattr(tool, '__name__'):
+                # It's a raw function
+                self.tool_map[tool.__name__] = tool
         
         # Initialize chat history
         self.chat = self.client.chats.create(
@@ -46,13 +58,42 @@ class GeminiProvider(LLMProvider):
             # New SDK call format
             response = self.chat.send_message(message)
             
-            # Handle different response scenarios
+            # Check if the model wants to call a function
+            if hasattr(response, 'candidates') and response.candidates:
+                candidate = response.candidates[0]
+                if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts') and candidate.content.parts:
+                    for part in candidate.content.parts:
+                        # Check for function call
+                        if hasattr(part, 'function_call') and part.function_call:
+                            function_name = part.function_call.name
+                            function_args = dict(part.function_call.args)
+                            
+                            # Execute the function manually
+                            if function_name in self.tool_map:
+                                result = self.tool_map[function_name](**function_args)
+                                
+                                # Send the function result back to the model
+                                function_response = self.chat.send_message(
+                                    types.Part.from_function_response(
+                                        name=function_name,
+                                        response={"result": result}
+                                    )
+                                )
+                                
+                                # Return the model's response after processing the function result
+                                if function_response.text:
+                                    # Include the function result in the response
+                                    return f"{result}\n\n{function_response.text}"
+                                else:
+                                    return result
+            
+            # Handle text response
             if response.text:
                 return response.text
             elif hasattr(response, 'candidates') and response.candidates:
                 # Try to extract content from candidates
                 candidate = response.candidates[0]
-                if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts') and candidate.content.parts:
                     parts_text = []
                     for part in candidate.content.parts:
                         if hasattr(part, 'text') and part.text:

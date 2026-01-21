@@ -16,7 +16,10 @@ class AvicennaAgent:
             "IMPORTANT: You have access to ONLY the following tools:\n"
             "1. get_current_time - Get the current date and time\n"
             "2. calculate - Perform mathematical calculations\n"
-            "3. send_email - Send emails via Gmail\n\n"
+            "3. draft_email - Create an email draft and show preview (use this FIRST when user wants to send email)\n"
+            "4. send_email - Send the email (use this ONLY after user confirms the draft)\n\n"
+            "EMAIL WORKFLOW: When user wants to send an email, ALWAYS use draft_email first to show them the preview. "
+            "Only call send_email after they explicitly confirm. Never send emails without showing the draft first.\n\n"
             "DO NOT claim to have access to any other tools or services. "
             "If asked about tools you don't have, be honest and say you don't have access to them."
         )

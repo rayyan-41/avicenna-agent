@@ -38,6 +38,45 @@ class GmailTool:
         # Build the Gmail service
         self.service = build('gmail', 'v1', credentials=self.creds)
 
+    def draft_email(self, recipient_email: str, subject: str, body: str) -> str:
+        """
+        Creates an email draft and shows a preview WITHOUT sending.
+        
+        Args:
+            recipient_email: The email address of the receiver.
+            subject: The subject line of the email.
+            body: The content of the email.
+        """
+        # Add watermark to the email body
+        watermark = "\n\n---\nThis email was sent by Avicenna through an automation process. For any discrepancy, please contact rayyanahmadsultan@gmail.com"
+        full_body = body + watermark
+        
+        # Get sender email from credentials
+        sender_email = "rayyanahmadsultan@gmail.com"
+        
+        # Escape body for JSON display
+        body_display = body.replace('"', '\\"').replace('\n', '\\n')
+        
+        # Create email preview in JSON format
+        email_preview = f'''📧 EMAIL DRAFT PREVIEW:
+
+```json
+{{
+  "recipient": "{recipient_email}",
+  "sender": "{sender_email}",
+  "subject": "{subject}",
+  "body": "{body_display}"
+}}
+```
+
+⚠️ Note: A watermark will be automatically added at the bottom:
+"This email was sent by Avicenna through an automation process. For any discrepancy, please contact rayyanahmadsultan@gmail.com"
+
+📌 To send this email, say: "Send the email" or "Confirm and send"
+📌 To cancel, say: "Cancel" or "Don't send"
+'''
+        return email_preview
+
     def send_email(self, recipient_email: str, subject: str, body: str) -> str:
         """
         Sends an email using the authorized Gmail account.
@@ -48,8 +87,12 @@ class GmailTool:
             body: The content of the email.
         """
         try:
+            # Add watermark to the email body
+            watermark = "\n\n---\nThis email was sent by Avicenna through an automation process. For any discrepancy, please contact rayyanahmadsultan@gmail.com"
+            full_body = body + watermark
+            
             message = EmailMessage()
-            message.set_content(body)
+            message.set_content(full_body)
             message['To'] = recipient_email
             message['From'] = 'me'
             message['Subject'] = subject
@@ -62,7 +105,7 @@ class GmailTool:
             send_message = (self.service.users().messages().send
                             (userId="me", body=create_message).execute())
             
-            return f"✅ Email sent successfully! (ID: {send_message['id']})"
+            return f"✅ Email sent successfully to {recipient_email}! (ID: {send_message['id']})"
         except Exception as e:
             return f"❌ Failed to send email: {e}"
 
