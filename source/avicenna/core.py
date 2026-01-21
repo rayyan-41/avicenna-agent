@@ -1,3 +1,4 @@
+from typing import Optional
 from rich.console import Console
 from .config import Config
 from .providers.gemini import GeminiProvider
@@ -6,7 +7,7 @@ from ..tools.basic import BASIC_TOOLS
 console = Console()
 
 class AvicennaAgent:
-    def __init__(self):
+    def __init__(self) -> None:
         if not Config.validate():
             raise ValueError("Configuration Error")
 

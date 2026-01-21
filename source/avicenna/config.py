@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from typing import Optional
 from dotenv import load_dotenv
 from rich.console import Console
 
@@ -25,15 +26,15 @@ class Config:
     """
     
     # The Google API Key for Gemini
-    API_KEY = os.getenv("GOOGLE_API_KEY")
+    API_KEY: Optional[str] = os.getenv("GOOGLE_API_KEY")
     
     # The Model Name
     # We default to 'gemini-2.0-flash-exp' for speed during development.
     # You can change this in your .env file without touching code.
-    MODEL_NAME = os.getenv("AVICENNA_MODEL", "gemini-2.0-flash-exp")
+    MODEL_NAME: str = os.getenv("AVICENNA_MODEL", "gemini-2.0-flash-exp")
     
     @classmethod
-    def validate(cls):
+    def validate(cls) -> bool:
         """
         Verifies that critical configuration is present.
         Returns False if the API key is missing, stopping the app early.

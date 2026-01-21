@@ -3,19 +3,28 @@
 .env.local
 credentials.json
 token.json
+# New secure location for Gmail tokens
+.avicenna/
 
 #--- Python ---
 __pycache__/
 *.py[cod]
 *$py.class
+*.egg-info/
+dist/
+build/
 
 #--- Virtual Environment ---
 venv/
 env/
+.venv/
 
 #--- IDE Settings ---
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
 
 #--- OS Generated ---
 .DS_Store

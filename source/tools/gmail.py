@@ -1,5 +1,8 @@
+import os
 import os.path
 import base64
+from pathlib import Path
+from typing import Optional
 from email.message import EmailMessage
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -9,34 +12,61 @@ from googleapiclient.discovery import build
 # Define the permission scope (Sending emails only)
 SCOPES = ['https://www.googleapis.com/auth/gmail.send']
 
+# Secure storage location in user's home directory
+AVICENNA_DIR = Path.home() / '.avicenna'
+AVICENNA_DIR.mkdir(exist_ok=True)  # Create directory if it doesn't exist
+
+TOKEN_PATH = AVICENNA_DIR / 'gmail_token.json'
+CREDENTIALS_PATH = Path('credentials.json')  # Still in project root for now
+
 class GmailTool:
-    def __init__(self):
-        self.creds = None
-        # token.json stores the user's access and refresh tokens.
-        # It is created automatically when the authorization flow completes for the first time.
-        if os.path.exists('token.json'):
-            self.creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+    def __init__(self) -> None:
+        self.creds: Optional[Credentials] = None
+        self.sender_email: str = 'me'
+        
+        # token.json is now stored in ~/.avicenna/ for security
+        if TOKEN_PATH.exists():
+            self.creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
             
         # If there are no (valid) credentials available, let the user log in.
         if not self.creds or not self.creds.valid:
             if self.creds and self.creds.expired and self.creds.refresh_token:
-                self.creds.refresh(Request())
-            else:
-                if not os.path.exists('credentials.json'):
-                     raise FileNotFoundError("❌ CRITICAL: 'credentials.json' not found in project root.")
+                try:
+                    self.creds.refresh(Request())
+                except Exception as e:
+                    print(f"⚠️ Warning: Token refresh failed: {e}")
+                    print("⚠️ Re-authentication required...")
+                    self.creds = None
+            
+            if not self.creds:
+                if not CREDENTIALS_PATH.exists():
+                    raise FileNotFoundError(
+                        f"❌ CRITICAL: '{CREDENTIALS_PATH}' not found in project root.\n"
+                        "Please download OAuth credentials from Google Cloud Console."
+                    )
                 
                 # Triggers the local browser authentication
                 print("⚠️ Initiating Google Login in your browser...")
                 flow = InstalledAppFlow.from_client_secrets_file(
-                    'credentials.json', SCOPES)
+                    str(CREDENTIALS_PATH), SCOPES)
                 self.creds = flow.run_local_server(port=0)
                 
-            # Save the credentials for the next run
-            with open('token.json', 'w') as token:
+            # Save the credentials for the next run in secure location
+            with open(TOKEN_PATH, 'w') as token:
                 token.write(self.creds.to_json())
+            print(f"✅ Token saved securely to: {TOKEN_PATH}")
 
         # Build the Gmail service
         self.service = build('gmail', 'v1', credentials=self.creds)
+        
+        # Get sender email from authenticated user profile
+        try:
+            profile = self.service.users().getProfile(userId='me').execute()
+            self.sender_email = profile['emailAddress']
+        except Exception as e:
+            # Fallback: will be set to 'me' in email sending
+            self.sender_email = 'me'
+            print(f"⚠️ Warning: Could not fetch sender email: {e}")
 
     def draft_email(self, recipient_email: str, subject: str, body: str) -> str:
         """
@@ -48,11 +78,11 @@ class GmailTool:
             body: The content of the email.
         """
         # Add watermark to the email body
-        watermark = "\n\n---\nThis email was sent by Avicenna through an automation process. For any discrepancy, please contact rayyanahmadsultan@gmail.com"
+        watermark = f"\n\n---\nThis email was sent by Avicenna AI Agent through an automation process. Sender: {self.sender_email}"
         full_body = body + watermark
         
-        # Get sender email from credentials
-        sender_email = "rayyanahmadsultan@gmail.com"
+        # Get sender email from authenticated user
+        sender_email = self.sender_email
         
         # Escape body for JSON display
         body_display = body.replace('"', '\\"').replace('\n', '\\n')
@@ -88,7 +118,7 @@ class GmailTool:
         """
         try:
             # Add watermark to the email body
-            watermark = "\n\n---\nThis email was sent by Avicenna through an automation process. For any discrepancy, please contact rayyanahmadsultan@gmail.com"
+            watermark = f"\n\n---\nThis email was sent by Avicenna AI Agent through an automation process. Sender: {self.sender_email}"
             full_body = body + watermark
             
             message = EmailMessage()
