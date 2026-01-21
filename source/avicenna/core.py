@@ -28,7 +28,16 @@ class AvicennaAgent:
             tools=BASIC_TOOLS
         )
         
-        console.print(f" [green]✓ Connected[/green]")
+        # Test the connection with a simple ping
+        try:
+            test_response = self.ai.send_message("ping")
+            if "error" in test_response.lower() or "503" in test_response or "429" in test_response:
+                console.print(f" [red]✗ Failed[/red]")
+                raise ValueError(f"Connection test failed: {test_response}")
+            console.print(f" [green]✓ Connected[/green]")
+        except Exception as e:
+            console.print(f" [red]✗ Failed[/red]")
+            raise ValueError(f"Failed to connect to {Config.MODEL_NAME}: {str(e)}")
         
     def send_message(self, user_input: str) -> str:
         # We delegate the work to the loaded provider
