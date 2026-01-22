@@ -36,13 +36,13 @@ class MCPConfiguration:
         return cls(servers=[
             MCPServerConfig(
                 name="basic",
-                script="source/tools/basic_server.py",
+                script="mcp/basic_server.py",
                 enabled=True,
                 description="Basic tools: time, calculator"
             ),
             MCPServerConfig(
                 name="gmail",
-                script="source/tools/gmail_server.py",
+                script="mcp/gmail_server.py",
                 enabled=True,
                 description="Gmail email sending capabilities"
             )
