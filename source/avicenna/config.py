@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
 from rich.console import Console
+from .mcp.mcp_config_schema import MCPConfiguration
 
 # Initialize Rich console for pretty error messages
 console = Console()
@@ -32,6 +33,24 @@ class Config:
     # We default to 'gemini-2.0-flash-exp' for speed during development.
     # You can change this in your .env file without touching code.
     MODEL_NAME: str = os.getenv("AVICENNA_MODEL", "gemini-2.0-flash-exp")
+    
+    # MCP Configuration
+    MCP_CONFIG_PATH = Path.home() / '.avicenna' / 'mcp_config.json'
+    
+    @classmethod
+    def load_mcp_config(cls) -> MCPConfiguration:
+        """Load MCP configuration, creating default if needed"""
+        if not cls.MCP_CONFIG_PATH.exists():
+            config = MCPConfiguration.default()
+            config.save(cls.MCP_CONFIG_PATH)
+            console.print(f"[green]✅ Created default MCP config:[/green] {cls.MCP_CONFIG_PATH}")
+            return config
+        
+        try:
+            return MCPConfiguration.from_file(cls.MCP_CONFIG_PATH)
+        except Exception as e:
+            console.print(f"[yellow]⚠️ Error loading MCP config, using defaults:[/yellow] {e}")
+            return MCPConfiguration.default()
     
     @classmethod
     def validate(cls) -> bool:
