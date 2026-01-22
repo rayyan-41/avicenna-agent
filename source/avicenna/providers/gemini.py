@@ -164,17 +164,9 @@ class GeminiProvider(LLMProvider):
                         if parts_text:
                             return ''.join(parts_text)
                 
-                # Debug: Show response structure
-                debug_info = [f"Response type: {type(response).__name__}"]
-                if hasattr(response, 'candidates') and response.candidates:
-                    candidate = response.candidates[0]
-                    if hasattr(candidate, 'finish_reason'):
-                        debug_info.append(f"Finish reason: {candidate.finish_reason}")
-                    if hasattr(candidate, 'safety_ratings'):
-                        debug_info.append(f"Safety ratings: {candidate.safety_ratings}")
-                
-                logger.warning(f"Empty response received: {debug_info}")
-                return "⚠️ Empty response received.\n" + "\n".join(debug_info)
+                # Empty response handling
+                logger.warning(f"Empty response received from model")
+                return "AI model provides no response. Reconsider prompt."
                 
             except ConnectionError as e:
                 logger.error(f"Connection error (attempt {attempt + 1}/{max_retries}): {e}")
