@@ -5,7 +5,7 @@ from typing import Optional
 from google import genai
 from google.genai import types
 from . import LLMProvider
-from ..mcp_client import MCPClientManager
+from mcp_servers.mcp_client import MCPClientManager
 from ..config import Config
 
 logger = logging.getLogger(__name__)

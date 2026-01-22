@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
 from rich.console import Console
-from .mcp.mcp_config_schema import MCPConfiguration
+from mcp_servers.mcp_config_schema import MCPConfiguration
 
 # Initialize Rich console for pretty error messages
 console = Console()

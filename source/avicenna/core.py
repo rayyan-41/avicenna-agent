@@ -2,7 +2,6 @@ from typing import Optional
 from rich.console import Console
 from .config import Config
 from .providers.gemini import GeminiProvider
-from ..tools.basic import BASIC_TOOLS
 
 console = Console()
 
@@ -61,33 +60,60 @@ class AvicennaAgent:
             "These principles operate as immutable constraints on system behavior."
         )
 
-        # FACTORY PATTERN:
-        # Here we decide which brain to load based on Config.
-        # Later, we can add: if Config.PROVIDER == "claude": ...
-        
-        console.print(f"[dim]🔌 Connecting to {Config.MODEL_NAME}...[/dim]", end="")
-        
+        # Create provider (not initialized yet)
         self.ai = GeminiProvider(
             api_key=Config.API_KEY,
             model_name=Config.MODEL_NAME,
-            system_instruction=self.system_instruction,
-            tools=BASIC_TOOLS
+            system_instruction=self.system_instruction
         )
         
-        # Test the connection with a simple ping
-        try:
-            test_response = self.ai.send_message("ping")
-            if "error" in test_response.lower() or "503" in test_response or "429" in test_response:
-                console.print(f" [red]✗ Failed[/red]")
-                raise ValueError(f"Connection test failed: {test_response}")
-            console.print(f" [green]✓ Connected[/green]")
-        except Exception as e:
-            console.print(f" [red]✗ Failed[/red]")
-            raise ValueError(f"Failed to connect to {Config.MODEL_NAME}: {str(e)}")
+        self.initialized = False
+    
+    async def initialize(self):
+        """
+        Async initialization - must be called before use
         
-    def send_message(self, user_input: str) -> str:
-        # We delegate the work to the loaded provider
-        return self.ai.send_message(user_input)
+        Connects to MCP servers and sets up tools
+        """
+        console.print(f"[dim]🔌 Connecting to {Config.MODEL_NAME}...[/dim]", end="")
+        
+        try:
+            # Initialize provider (connects to MCP servers)
+            await self.ai.initialize()
+            
+            # Test connection
+            test_response = await self.ai.send_message("ping")
+            if "error" in test_response.lower():
+                console.print(f" [green]✗ Failed[/green]")
+                raise ValueError(f"Connection test failed: {test_response}")
+            
+            console.print(f" [green]✓ Connected[/green]")
+            self.initialized = True
+            
+        except Exception as e:
+            console.print(f" [green]✗ Failed[/green]")
+            raise ValueError(f"Failed to initialize: {str(e)}")
+    
+    async def send_message(self, user_input: str) -> str:
+        """
+        Send a message to the agent
+        
+        Args:
+            user_input: User's message
+            
+        Returns:
+            Agent's response
+        """
+        if not self.initialized:
+            return "⚠️ Error: Agent not initialized. Call initialize() first."
+        
+        return await self.ai.send_message(user_input)
 
-    def clear_history(self):
-        self.ai.clear_history()
+    async def clear_history(self):
+        """Clear conversation history"""
+        await self.ai.clear_history()
+    
+    async def cleanup(self):
+        """Clean up resources"""
+        if self.initialized:
+            await self.ai.cleanup()

@@ -13,7 +13,7 @@ from mcp.types import Tool as MCPTool
 
 from google.genai import types as genai_types
 
-from .mcp.mcp_config_schema import MCPServerConfig
+from mcp_servers.mcp_config_schema import MCPServerConfig
 
 logger = logging.getLogger(__name__)
 
