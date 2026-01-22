@@ -17,9 +17,9 @@ mcp = FastMCP("Gmail")
 # Initialize Gmail tool (authentication happens here)
 try:
     gmail_service = GmailTool()
-    print("✅ Gmail authentication successful")
+    print("[INFO] Gmail authentication successful", file=sys.stderr)
 except Exception as e:
-    print(f"⚠️ Gmail authentication failed: {e}")
+    print(f"[WARNING] Gmail authentication failed: {e}", file=sys.stderr)
     gmail_service = None
 
 @mcp.tool()
@@ -39,7 +39,7 @@ def draft_email(recipient_email: str, subject: str, body: str) -> str:
         A formatted preview of the email with confirmation prompt
     """
     if gmail_service is None:
-        return "❌ Gmail service not authenticated. Run gmail_server.py directly first."
+        return "[ERROR] Gmail service not authenticated. Run gmail_server.py directly first."
     
     return gmail_service.draft_email(recipient_email, subject, body)
 
@@ -59,7 +59,7 @@ def send_email(recipient_email: str, subject: str, body: str) -> str:
         Confirmation message with email ID or error message
     """
     if gmail_service is None:
-        return "❌ Gmail service not authenticated. Run gmail_server.py directly first."
+        return "[ERROR] Gmail service not authenticated. Run gmail_server.py directly first."
     
     return gmail_service.send_email(recipient_email, subject, body)
 
