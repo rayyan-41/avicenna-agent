@@ -40,9 +40,9 @@ class GeminiProvider(LLMProvider):
         # Report connection status
         for server_name, success in connection_results.items():
             if success:
-                logger.info(f"  ✓ {server_name}")
+                logger.debug(f"  Connected: {server_name}")
             else:
-                logger.warning(f"  ✗ {server_name} (failed)")
+                logger.warning(f"  Failed: {server_name}")
         
         # Get tools in Gemini format
         gemini_tools = self.mcp_manager.get_gemini_tools()
@@ -110,13 +110,13 @@ class GeminiProvider(LLMProvider):
                             return "⚠️ Response blocked due to recitation concerns. Please try a different query."
                     
                     # Check for function calls
-                    if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                    if hasattr(candidate, 'content') and candidate.content and hasattr(candidate.content, 'parts') and candidate.content.parts:
                         for part in candidate.content.parts:
                             if hasattr(part, 'function_call') and part.function_call:
                                 function_name = part.function_call.name
                                 function_args = dict(part.function_call.args)
                                 
-                                logger.info(f"Tool call: {function_name}")
+                                logger.debug(f"Tool call: {function_name} with args: {function_args}")
                                 
                                 # Execute tool via MCP
                                 try:
@@ -131,11 +131,13 @@ class GeminiProvider(LLMProvider):
                                     logger.error(f"Tool execution error: {e}")
                                     return f"⚠️ Error executing tool '{function_name}': {str(e)}"
                                 
-                                # Special handling for draft_email - return preview directly
+                                # Special handling for draft_email - return preview DIRECTLY to user
+                                # This preserves the exact formatting without model reinterpretation
                                 if function_name == 'draft_email':
                                     return result
                                 
-                                # For other tools, send result back to model
+                                # For other tools, send result back to model for processing
+                                # This allows the model to maintain context and handle multi-step workflows
                                 function_response = self.chat.send_message(
                                     types.Part.from_function_response(
                                         name=function_name,
@@ -153,7 +155,7 @@ class GeminiProvider(LLMProvider):
                     return response.text
                 elif hasattr(response, 'candidates') and response.candidates:
                     candidate = response.candidates[0]
-                    if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                    if hasattr(candidate, 'content') and candidate.content and hasattr(candidate.content, 'parts') and candidate.content.parts:
                         parts_text = []
                         for part in candidate.content.parts:
                             if hasattr(part, 'text') and part.text:
@@ -162,7 +164,7 @@ class GeminiProvider(LLMProvider):
                             return ''.join(parts_text)
                 
                 # Empty response
-                logger.warning("Empty response received from model")
+                logger.warning("Empty response from model")
                 return "AI model provides no response. Reconsider prompt."
                 
             except ConnectionError as e:

@@ -19,5 +19,5 @@ avicenna = "source.avicenna.main:app"
 
 # --- FIX BELOW: Explicitly tell setuptools what to include ---
 [tool.setuptools.packages.find]
-include = ["source*"]  # Only include the 'source' package
+include = ["source*", "mcp_servers*"]  # Include 'source' and 'mcp_servers' packages
 exclude = ["web*", "tests*"]   # Ignore 'web' and 'tests'

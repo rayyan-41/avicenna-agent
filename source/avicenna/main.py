@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import typer
 from rich.console import Console
 from rich.text import Text
@@ -12,6 +13,16 @@ from .config import Config
 
 app = typer.Typer()
 console = Console()
+
+# Configure logging - only log to file by default, not console
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('avicenna.log')
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # --- Aesthetic Constants ---
 NEON_GREEN = "#00ff00"
@@ -47,8 +58,17 @@ def print_header(model_name: str):
 @app.command()
 def chat(
     model: Optional[str] = typer.Option(None, help="Override the model"),
+    debug: bool = typer.Option(False, "--debug", "-d", help="Enable debug logging to console"),
 ):
     """Start Avicenna chat session"""
+    if debug:
+        # Add console handler for debug mode
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.DEBUG)
+        console_handler.setFormatter(logging.Formatter('%(name)s - %(levelname)s - %(message)s'))
+        logging.getLogger().addHandler(console_handler)
+        logging.getLogger().setLevel(logging.DEBUG)
+        logger.info("Debug mode enabled - logging to console and file")
     asyncio.run(async_chat(model))
 
 async def async_chat(model: Optional[str] = None):

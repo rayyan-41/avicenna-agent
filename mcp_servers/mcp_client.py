@@ -41,7 +41,7 @@ class MCPClientManager:
             script_path = Path(server_config.script)
             if not script_path.is_absolute():
                 # Make relative to project root
-                project_root = Path(__file__).parent.parent.parent
+                project_root = Path(__file__).parent.parent
                 script_path = project_root / script_path
             
             if not script_path.exists():
@@ -88,13 +88,13 @@ class MCPClientManager:
             for tool in tools_list.tools:
                 self.tools[tool.name] = tool
                 self.tool_to_server[tool.name] = server_config.name
-                logger.info(f"  ✓ Registered tool: {tool.name}")
+                logger.debug(f"  Registered tool: {tool.name}")
             
-            logger.info(f"✅ Connected to {server_config.name}: {len(tools_list.tools)} tools")
+            logger.info(f"Connected to {server_config.name}: {len(tools_list.tools)} tools")
             return True
             
         except Exception as e:
-            logger.error(f"❌ Failed to connect to {server_config.name}: {e}")
+            logger.error(f"Failed to connect to {server_config.name}: {e}")
             import traceback
             logger.debug(traceback.format_exc())
             return False
@@ -145,17 +145,17 @@ class MCPClientManager:
         result = await session.call_tool(tool_name, arguments=arguments)
         
         # Extract content from result
-        if result.content:
+        if result and hasattr(result, 'content') and result.content:
             # Concatenate all text content
             text_parts = []
             for content in result.content:
-                if hasattr(content, 'text'):
+                if hasattr(content, 'text') and content.text:
                     text_parts.append(content.text)
             
             if text_parts:
                 return '\n'.join(text_parts)
         
-        return str(result)
+        return str(result) if result else "Tool execution completed with no output."
     
     def get_gemini_tools(self) -> List[genai_types.Tool]:
         """
@@ -217,4 +217,4 @@ class MCPClientManager:
         self.sessions.clear()
         self.tools.clear()
         self.tool_to_server.clear()
-        logger.info("✅ All MCP servers disconnected")
+        logger.info("All MCP servers disconnected")

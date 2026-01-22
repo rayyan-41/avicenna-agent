@@ -5,6 +5,11 @@ avicenna_agent.egg-info/dependency_links.txt
 avicenna_agent.egg-info/entry_points.txt
 avicenna_agent.egg-info/requires.txt
 avicenna_agent.egg-info/top_level.txt
+mcp_servers/__init__.py
+mcp_servers/basic_server.py
+mcp_servers/gmail_server.py
+mcp_servers/mcp_client.py
+mcp_servers/mcp_config_schema.py
 source/__init__.py
 source/avicenna/__init__.py
 source/avicenna/config.py
@@ -13,5 +18,5 @@ source/avicenna/main.py
 source/avicenna/providers/__init__.py
 source/avicenna/providers/gemini.py
 source/tools/__init__.py
-source/tools/base.py
-source/tools/basic.py
+source/tools/gmail.py
+tests/test_setup.py
