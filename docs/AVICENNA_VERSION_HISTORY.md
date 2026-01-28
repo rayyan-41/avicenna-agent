@@ -6,20 +6,311 @@ A comprehensive timeline documenting the evolution of Avicenna from a simple Gem
 
 ## Table of Contents
 
-- [Version 0.1.0 - Genesis: Gemini API Wrapper](#version-010---genesis-gemini-api-wrapper)
-- [Version 0.2.0 - Tool Foundation](#version-020---tool-foundation)
-- [Version 0.3.0 - Gmail Integration](#version-030---gmail-integration)
-- [Version 0.4.0 - Constitutional Framework](#version-040---constitutional-framework)
-- [Version 0.5.0 - Email Workflow Refinement](#version-050---email-workflow-refinement)
-- [Version 0.6.0 - MCP Migration Planning](#version-060---mcp-migration-planning)
-- [Version 0.7.0 - MCP Server Implementation](#version-070---mcp-server-implementation)
-- [Version 0.8.0 - MCP Client Integration](#version-080---mcp-client-integration)
+- [Version 2.0.0 - MCP Ecosystem Integration](#version-200---mcp-ecosystem-integration)
+- [Version 1.0.0 - Async Architecture & MCP Complete](#version-100---async-architecture--mcp-complete)
 - [Version 0.9.0 - Project Reorganization](#version-090---project-reorganization)
-- [Version 1.0.0 - Async Architecture &amp; MCP Complete](#version-100---async-architecture--mcp-complete)
+- [Version 0.8.0 - MCP Client Integration](#version-080---mcp-client-integration)
+- [Version 0.7.0 - MCP Server Implementation](#version-070---mcp-server-implementation)
+- [Version 0.6.0 - MCP Migration Planning](#version-060---mcp-migration-planning)
+- [Version 0.5.0 - Email Workflow Refinement](#version-050---email-workflow-refinement)
+- [Version 0.4.0 - Constitutional Framework](#version-040---constitutional-framework)
+- [Version 0.3.0 - Gmail Integration](#version-030---gmail-integration)
+- [Version 0.2.0 - Tool Foundation](#version-020---tool-foundation)
+- [Version 0.1.0 - Genesis: Gemini API Wrapper](#version-010---genesis-gemini-api-wrapper)
 
 ---
 
-## Version 0.1.0 - Genesis: Gemini API Wrapper
+## Version 2.0.0 - MCP Ecosystem Integration
+
+**Release Date:** January 28, 2026
+**Status:** Production Release
+**Architecture:** MCP Ecosystem Integration with Multi-Type Server Support
+
+### Overview
+
+A major evolution that transforms Avicenna from using custom MCP servers to leveraging the official Model Context Protocol ecosystem. This version adds support for Node.js-based MCP servers from npm, dramatically expanding capabilities while reducing maintenance burden.
+
+### Key Achievements
+
+**🌐 MCP Ecosystem Integration**
+- Migrated from custom Python servers to official MCP ecosystem servers
+- Access to community-maintained, production-ready tools
+- Leverage established npm packages for rich functionality
+
+**📦 Multi-Type Server Support**
+- Support for Python scripts (legacy)
+- Support for Node.js packages via `npx`
+- Support for direct executable commands
+- Automatic package installation via `npx -y`
+
+**📁 Filesystem Operations (14 Tools)**
+- Complete file/directory management
+- Read/write files with various encodings
+- Directory tree visualization
+- File search with patterns
+- Safe operation within allowed directories
+
+**🧠 Enhanced Reasoning**
+- Sequential thinking tool for complex problem-solving
+- Step-by-step analysis capability
+- Improved multi-step task handling
+
+**📊 Server Status Display**
+- Beautiful table showing all configured servers
+- Real-time connection status
+- Tool count per server
+- Type indicators (Node.js/Python/Executable)
+- Error reporting for failed connections
+
+### Technical Changes
+
+#### Phase 1: Configuration Schema Enhancement
+
+**File:** `mcp_servers/mcp_config_schema.py`
+
+- Added `SERVER_TYPE_*` constants for server types
+- Enhanced `MCPServerConfig` dataclass:
+  - `type` field (python/node/executable)
+  - `package` field for npm packages
+  - `command` field for executables
+  - Validation in `__post_init__()`
+  - `to_dict()` and `from_dict()` methods
+- Enhanced `MCPConfiguration`:
+  - Version field (now "2.0")
+  - `get_enabled_servers()` helper
+  - `get_server()` lookup method
+- Backward compatibility with v1.0 configs
+- New default config with MCP ecosystem servers
+
+**Commit:** 
+```
+feat(mcp): Add Node.js server support to MCP configuration schema
+```
+
+#### Phase 2: MCP Client Manager Update
+
+**File:** `mcp_servers/mcp_client.py`
+
+- New `_get_server_command()` method:
+  - Resolves commands for Python/Node.js/Executable
+  - Finds `npx` in common Windows paths
+  - Proper environment variable merging
+  - Detailed error messages
+- Updated `connect_server()`:
+  - Multi-type server support
+  - Better error handling
+  - Unicode-safe logging
+
+**Files:** `source/avicenna/providers/gemini.py`
+
+- New dataclasses:
+  - `ServerStatus`: Per-server connection info
+  - `MCPInitResult`: Initialization results
+- Enhanced `initialize()`:
+  - Returns detailed status for each server
+  - Tracks tools per server
+  - Builds tools-by-server mapping
+- Better logging and status reporting
+
+**Files:** `source/avicenna/core.py`, `source/avicenna/main.py`
+
+- New `display_mcp_status()` function:
+  - Rich table with server status
+  - Color-coded status indicators
+  - Tool count display
+  - Summary statistics
+- Updated initialization flow with status display
+- UTF-8 logging for Unicode support
+- Updated version strings to "2.0"
+
+**Commit:**
+```
+feat(mcp): Update MCP Client Manager for multi-type server support
+```
+
+#### Phase 3: Deprecation and Documentation
+
+**Structural Changes:**
+- Moved legacy servers to `mcp_servers/deprecated/`
+  - `basic_server.py`
+  - `gmail_server.py`
+- Moved legacy tools to `source/tools/deprecated/`
+  - `gmail.py`
+- Added README files explaining deprecation
+- Updated default config paths
+
+**Documentation:**
+- Completely rewrote `README.md` for v2.0
+- Added MCP ecosystem server documentation
+- Created troubleshooting section
+- Added migration guide from v1.0
+- Updated project structure documentation
+
+**New Documents:**
+- `docs/MCP_ECOSYSTEM_MIGRATION.md` - Detailed migration plan
+- `mcp_servers/deprecated/README.md` - Deprecation notes
+- `source/tools/deprecated/README.md` - Tool migration info
+
+**Commit:**
+```
+feat: Deprecate legacy servers and update documentation for v2.0
+```
+
+### Breaking Changes
+
+#### Configuration Format
+
+Old (v1.0):
+```json
+{
+  "mcp_servers": [{
+    "name": "basic",
+    "script": "mcp_servers/basic_server.py",
+    "enabled": true
+  }]
+}
+```
+
+New (v2.0):
+```json
+{
+  "version": "2.0",
+  "mcp_servers": [{
+    "name": "filesystem",
+    "type": "node",
+    "package": "@modelcontextprotocol/server-filesystem",
+    "enabled": true,
+    "args": ["C:\\Users\\Name\\Documents"]
+  }]
+}
+```
+
+**Migration:** Automatic - old configs are auto-detected and converted
+
+#### Default Servers
+
+**Removed (now disabled):**
+- `basic_server.py` - Time/calculator tools
+- `gmail_server.py` - Gmail draft/send
+
+**Added (enabled by default):**
+- `@modelcontextprotocol/server-filesystem` - 14 file tools
+- `@modelcontextprotocol/server-sequential-thinking` - 1 reasoning tool
+
+### New Features
+
+1. **15 Tools from 2 Servers** (vs 4 tools from 2 servers in v1.0)
+   
+2. **Filesystem Tools:**
+   - `read_file`, `read_text_file`, `read_media_file`
+   - `read_multiple_files`
+   - `write_file`, `edit_file`
+   - `create_directory`, `list_directory`
+   - `list_directory_with_sizes`
+   - `directory_tree`
+   - `move_file`, `search_files`
+   - `get_file_info`
+   - `list_allowed_directories`
+
+3. **Sequential Thinking:**
+   - `sequentialthinking` - Enhanced reasoning tool
+
+4. **Server Status Display:**
+   ```
+   MCP Servers
+   ┏━━━━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━┓
+   ┃ Status ┃ Server         ┃ Type    ┃ Tools ┃ Info      ┃
+   ┡━━━━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━┩
+   │   ✓    │ filesystem     │ Node.js │    14 │ Connected │
+   │   ✓    │ sequential-... │ Node.js │     1 │ Connected │
+   └────────┴────────────────┴─────────┴───────┴───────────┘
+   📦 2/2 servers connected, 15 tools available
+   ```
+
+5. **Optional Servers (disabled by default):**
+   - `mcp-server-fetch-typescript` - Web content fetching
+   - `@modelcontextprotocol/server-brave-search` - Web search
+
+### Dependencies
+
+**New Requirements:**
+- Node.js 16+ (for MCP ecosystem servers)
+- `npx` (comes with Node.js)
+
+**Python Dependencies (unchanged):**
+- google-genai>=0.3.0
+- python-dotenv>=1.0.0
+- typer>=0.9.0
+- rich>=13.0.0
+- mcp
+- fastmcp
+
+### Migration Guide
+
+For users upgrading from v1.0:
+
+1. **Install Node.js:**
+   ```bash
+   # Download from https://nodejs.org
+   # Verify installation:
+   node --version
+   npx --version
+   ```
+
+2. **Backup existing config:**
+   ```bash
+   cp ~/.avicenna/mcp_config.json ~/.avicenna/mcp_config.json.backup
+   ```
+
+3. **Delete old config:**
+   ```bash
+   rm ~/.avicenna/mcp_config.json
+   ```
+
+4. **Run Avicenna:**
+   ```bash
+   python -m source.avicenna.main
+   ```
+   
+   New v2.0 config will be auto-generated.
+
+5. **Configure filesystem allowed directories:**
+   
+   Edit `~/.avicenna/mcp_config.json`:
+   ```json
+   {
+     "name": "filesystem",
+     "args": ["C:\\Users\\YourName\\Documents", "C:\\Users\\YourName\\Downloads"]
+   }
+   ```
+
+### Known Issues
+
+- `@modelcontextprotocol/server-fetch` package doesn't exist (use `mcp-server-fetch-typescript`)
+- `@modelcontextprotocol/server-brave-search` is deprecated (still works)
+- Gmail server from v1.0 is deprecated (no official replacement yet)
+
+### Future Enhancements
+
+- Add official Gmail MCP server when available
+- Add Google Drive MCP server integration
+- Add database MCP servers (SQLite, PostgreSQL)
+- Add GitHub MCP server for repository operations
+- Web interface option
+
+### Statistics
+
+- **Lines of Code:** ~2,000
+- **Files Changed:** 8
+- **New Files:** 5
+- **Deprecated Files:** 3
+- **Available Tools:** 15 (vs 4 in v1.0)
+- **Connected Servers:** 2 (default)
+- **Configuration Version:** 2.0
+
+---
+
+## Version 1.0.0 - Async Architecture & MCP Complete
 
 **Release Date:** Early Development
 **Status:** Foundation

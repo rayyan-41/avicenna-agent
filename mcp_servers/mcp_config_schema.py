@@ -186,7 +186,7 @@ class MCPConfiguration:
                 MCPServerConfig(
                     name="basic",
                     type=SERVER_TYPE_PYTHON,
-                    script="mcp_servers/basic_server.py",
+                    script="mcp_servers/deprecated/basic_server.py",
                     enabled=False,  # Deprecated - use filesystem instead
                     description="[DEPRECATED] Basic tools: time, calculator"
                 ),
