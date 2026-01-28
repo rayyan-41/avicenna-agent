@@ -140,53 +140,54 @@ class MCPConfiguration:
         Create default configuration with recommended MCP servers.
         
         Includes:
-        - fetch: Web content fetching (no API key required)
-        - brave-search: Web search (requires API key)
+        - filesystem: Local file operations (primary tool)
         - sequential-thinking: Enhanced reasoning
-        - filesystem: Local file operations (disabled by default for security)
+        - fetch: Web content fetching (TypeScript version)
+        - brave-search: Web search (disabled, requires API key)
         """
         return cls(
             version="2.0",
             servers=[
-                # Web & Search
-                MCPServerConfig(
-                    name="fetch",
-                    type=SERVER_TYPE_NODE,
-                    package="@anthropic-ai/mcp-server-fetch",
-                    enabled=True,
-                    description="Fetch and extract content from web pages"
-                ),
-                MCPServerConfig(
-                    name="brave-search",
-                    type=SERVER_TYPE_NODE,
-                    package="@anthropic-ai/mcp-server-brave-search",
-                    enabled=False,  # Requires API key
-                    description="Web search via Brave Search API",
-                    env={"BRAVE_API_KEY": ""}
-                ),
-                # Reasoning
-                MCPServerConfig(
-                    name="sequential-thinking",
-                    type=SERVER_TYPE_NODE,
-                    package="@anthropic-ai/mcp-server-sequential-thinking",
-                    enabled=True,
-                    description="Enhanced step-by-step reasoning"
-                ),
-                # File System (disabled by default for security)
+                # File System - most commonly used
                 MCPServerConfig(
                     name="filesystem",
                     type=SERVER_TYPE_NODE,
-                    package="@anthropic-ai/mcp-server-filesystem",
-                    enabled=False,
-                    description="Read/write local files (configure allowed directories)",
-                    args=[]  # User must add allowed directories
+                    package="@modelcontextprotocol/server-filesystem",
+                    enabled=True,
+                    description="Read/write local files (configure allowed directories in args)",
+                    args=[]  # User should add allowed directories like: ["C:\\Users\\Name\\Documents"]
+                ),
+                # Reasoning - helps with complex tasks
+                MCPServerConfig(
+                    name="sequential-thinking",
+                    type=SERVER_TYPE_NODE,
+                    package="@modelcontextprotocol/server-sequential-thinking",
+                    enabled=True,
+                    description="Enhanced step-by-step reasoning for complex problems"
+                ),
+                # Web Fetch - requires playwright
+                MCPServerConfig(
+                    name="fetch",
+                    type=SERVER_TYPE_NODE,
+                    package="mcp-server-fetch-typescript",
+                    enabled=False,  # Requires playwright setup
+                    description="Fetch and extract content from web pages (requires: npx playwright install)"
+                ),
+                # Web Search - requires API key
+                MCPServerConfig(
+                    name="brave-search",
+                    type=SERVER_TYPE_NODE,
+                    package="@modelcontextprotocol/server-brave-search",
+                    enabled=False,  # Deprecated but still works with API key
+                    description="Web search via Brave Search API (requires BRAVE_API_KEY)",
+                    env={"BRAVE_API_KEY": ""}
                 ),
                 # Legacy Python servers (deprecated)
                 MCPServerConfig(
                     name="basic",
                     type=SERVER_TYPE_PYTHON,
                     script="mcp_servers/basic_server.py",
-                    enabled=False,  # Deprecated
+                    enabled=False,  # Deprecated - use filesystem instead
                     description="[DEPRECATED] Basic tools: time, calculator"
                 ),
             ]

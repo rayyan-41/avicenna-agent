@@ -19,7 +19,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('avicenna.log')
+        logging.FileHandler('avicenna.log', encoding='utf-8')
     ]
 )
 logger = logging.getLogger(__name__)
@@ -37,9 +37,9 @@ AVICENNA_ART = [
 ]
 
 TIPS = [
-    "Version 1.0",
+    "Version 2.0 - MCP Ecosystem",
     "Type 'exit' or 'quit' to end the session",
-    "Latest features: Gmail integration!",
+    "New: Node.js MCP server support!",
 ]
 
 def print_header(model_name: str):

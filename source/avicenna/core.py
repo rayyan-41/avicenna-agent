@@ -1,9 +1,73 @@
 from typing import Optional
 from rich.console import Console
+from rich.table import Table
 from .config import Config
-from .providers.gemini import GeminiProvider
+from .providers.gemini import GeminiProvider, MCPInitResult
 
 console = Console()
+
+# Colors
+NEON_GREEN = "#00ff00"
+DARK_GREEN = "#005500"
+
+
+def display_mcp_status(result: MCPInitResult):
+    """Display MCP server connection status in a formatted table"""
+    
+    # Create status table
+    table = Table(
+        title="MCP Servers",
+        title_style=f"bold {NEON_GREEN}",
+        border_style=DARK_GREEN,
+        show_header=True,
+        header_style=f"bold {NEON_GREEN}"
+    )
+    
+    table.add_column("Status", width=6, justify="center")
+    table.add_column("Server", min_width=20)
+    table.add_column("Type", width=10)
+    table.add_column("Tools", width=6, justify="right")
+    table.add_column("Info", min_width=20)
+    
+    for status in result.server_statuses:
+        # Status icon
+        if not status.enabled:
+            icon = "[dim]○[/dim]"  # Disabled
+            info = "[dim]Disabled[/dim]"
+        elif status.connected:
+            icon = f"[{NEON_GREEN}]✓[/]"  # Connected
+            info = f"[{NEON_GREEN}]Connected[/]"
+        else:
+            icon = "[red]✗[/red]"  # Failed
+            info = f"[red]{status.error or 'Failed'}[/red]"
+        
+        # Server type display
+        type_display = {
+            "node": "[cyan]Node.js[/cyan]",
+            "python": "[yellow]Python[/yellow]",
+            "executable": "[magenta]Exec[/magenta]"
+        }.get(status.server_type, status.server_type)
+        
+        # Tool count
+        tool_count = str(status.tool_count) if status.connected else "-"
+        
+        table.add_row(
+            icon,
+            status.name,
+            type_display,
+            tool_count,
+            info
+        )
+    
+    console.print(table)
+    
+    # Summary line
+    console.print(
+        f"[{DARK_GREEN}]📦 {result.connected_count}/{result.enabled_count} servers connected, "
+        f"{result.total_tools} tools available[/]"
+    )
+    console.print()
+
 
 class AvicennaAgent:
     def __init__(self) -> None:
@@ -78,23 +142,34 @@ class AvicennaAgent:
         
         Connects to MCP servers and sets up tools
         """
-        console.print(f"[dim]🔌 Connecting to {Config.MODEL_NAME}...[/dim]", end="")
+        console.print(f"[{DARK_GREEN}]🔌 Initializing MCP servers...[/]")
+        console.print()
         
         try:
             # Initialize provider (connects to MCP servers)
-            await self.ai.initialize()
+            mcp_result = await self.ai.initialize()
             
-            # Test connection
+            # Display MCP server status table
+            display_mcp_status(mcp_result)
+            
+            # Check if any servers connected
+            if mcp_result.connected_count == 0 and mcp_result.enabled_count > 0:
+                console.print(f"[yellow]⚠ Warning: No MCP servers connected. Some features may be unavailable.[/yellow]")
+                console.print()
+            
+            # Test LLM connection
+            console.print(f"[{DARK_GREEN}]🤖 Testing {Config.MODEL_NAME}...[/]", end="")
             test_response = await self.ai.send_message("ping")
             if "error" in test_response.lower():
-                console.print(f" [green]✗ Failed[/green]")
+                console.print(f" [{NEON_GREEN}]✗ Failed[/]")
                 raise ValueError(f"Connection test failed: {test_response}")
             
-            console.print(f" [green]✓ Connected[/green]")
+            console.print(f" [{NEON_GREEN}]✓ Ready[/]")
+            console.print()
             self.initialized = True
             
         except Exception as e:
-            console.print(f" [green]✗ Failed[/green]")
+            console.print(f" [red]✗ Failed[/red]")
             raise ValueError(f"Failed to initialize: {str(e)}")
     
     async def send_message(self, user_input: str) -> str:

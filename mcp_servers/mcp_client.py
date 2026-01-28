@@ -1,10 +1,17 @@
-"""MCP Client Manager for Avicenna"""
+"""MCP Client Manager for Avicenna - Version 2.0
+
+Manages connections to multiple MCP servers with support for:
+- Python scripts
+- Node.js packages (via npx)
+- Direct executables
+"""
 import asyncio
 import logging
 import shutil
 import sys
+import os
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from contextlib import AsyncExitStack
 
 from mcp import ClientSession, StdioServerParameters
@@ -13,31 +20,47 @@ from mcp.types import Tool as MCPTool
 
 from google.genai import types as genai_types
 
-from mcp_servers.mcp_config_schema import MCPServerConfig
+from mcp_servers.mcp_config_schema import (
+    MCPServerConfig,
+    SERVER_TYPE_PYTHON,
+    SERVER_TYPE_NODE,
+    SERVER_TYPE_EXECUTABLE
+)
 
 logger = logging.getLogger(__name__)
 
 
 class MCPClientManager:
-    """Manages connections to multiple MCP servers"""
+    """
+    Manages connections to multiple MCP servers.
+    
+    Supports multiple server types:
+    - Python: Local Python scripts
+    - Node: npm packages run via npx
+    - Executable: Direct command execution
+    """
     
     def __init__(self):
         self.sessions: Dict[str, ClientSession] = {}
         self.exit_stack = AsyncExitStack()
         self.tools: Dict[str, MCPTool] = {}  # tool_name -> MCPTool
         self.tool_to_server: Dict[str, str] = {}  # tool_name -> server_name
-        
-    async def connect_server(self, server_config: MCPServerConfig) -> bool:
+    
+    def _get_server_command(self, server_config: MCPServerConfig) -> Tuple[str, List[str]]:
         """
-        Connect to a single MCP server
+        Determine the command and arguments for a server based on its type.
         
         Returns:
-            True if connection successful, False otherwise
-        """
-        try:
-            logger.info(f"Connecting to MCP server: {server_config.name}")
+            Tuple of (command, args_list)
             
-            # Resolve script path
+        Raises:
+            ValueError: If server type is unknown or required paths not found
+        """
+        server_type = server_config.type
+        extra_args = server_config.args or []
+        
+        if server_type == SERVER_TYPE_PYTHON:
+            # Python script
             script_path = Path(server_config.script)
             if not script_path.is_absolute():
                 # Make relative to project root
@@ -45,25 +68,92 @@ class MCPClientManager:
                 script_path = project_root / script_path
             
             if not script_path.exists():
-                logger.error(f"Server script not found: {script_path}")
-                return False
+                raise ValueError(f"Server script not found: {script_path}")
             
-            # Find Python interpreter - prefer current interpreter
-            python_path = sys.executable
+            # Find Python interpreter
+            python_path = sys.executable or shutil.which("python") or shutil.which("python3")
             if not python_path:
-                python_path = shutil.which("python")
-            if not python_path:
-                python_path = shutil.which("python3")
+                raise ValueError("Python interpreter not found")
             
-            if not python_path:
-                logger.error("Python interpreter not found")
-                return False
+            return python_path, [str(script_path.absolute())] + extra_args
+        
+        elif server_type == SERVER_TYPE_NODE:
+            # Node.js package via npx
+            npx_path = shutil.which("npx")
+            if not npx_path:
+                # Try common Node.js installation paths on Windows
+                possible_paths = [
+                    Path(os.environ.get("PROGRAMFILES", "")) / "nodejs" / "npx.cmd",
+                    Path(os.environ.get("APPDATA", "")) / "npm" / "npx.cmd",
+                    Path.home() / "AppData" / "Roaming" / "npm" / "npx.cmd",
+                ]
+                for p in possible_paths:
+                    if p.exists():
+                        npx_path = str(p)
+                        break
+            
+            if not npx_path:
+                raise ValueError(
+                    "npx not found. Please install Node.js: https://nodejs.org/\n"
+                    "After installing, restart your terminal."
+                )
+            
+            package = server_config.package
+            if not package:
+                raise ValueError(f"Node server '{server_config.name}' requires 'package' name")
+            
+            # npx -y <package> [args...]
+            # -y flag auto-installs the package if not present
+            return npx_path, ["-y", package] + extra_args
+        
+        elif server_type == SERVER_TYPE_EXECUTABLE:
+            # Direct executable
+            command = server_config.command
+            if not command:
+                raise ValueError(f"Executable server '{server_config.name}' requires 'command'")
+            
+            # Try to find the command
+            exec_path = shutil.which(command)
+            if not exec_path:
+                # Try as absolute path
+                if Path(command).exists():
+                    exec_path = command
+                else:
+                    raise ValueError(f"Executable not found: {command}")
+            
+            return exec_path, extra_args
+        
+        else:
+            raise ValueError(f"Unknown server type: {server_type}")
+        
+    async def connect_server(self, server_config: MCPServerConfig) -> bool:
+        """
+        Connect to a single MCP server.
+        
+        Supports Python scripts, Node.js packages, and executables.
+        
+        Returns:
+            True if connection successful, False otherwise
+        """
+        try:
+            logger.info(f"Connecting to MCP server: {server_config.name} (type: {server_config.type})")
+            
+            # Get command and args based on server type
+            command, args = self._get_server_command(server_config)
+            
+            logger.debug(f"  Command: {command}")
+            logger.debug(f"  Args: {args}")
+            
+            # Merge environment variables
+            env = os.environ.copy()
+            if server_config.env:
+                env.update(server_config.env)
             
             # Configure server parameters
             server_params = StdioServerParameters(
-                command=python_path,
-                args=[str(script_path.absolute())],
-                env=server_config.env or {}
+                command=command,
+                args=args,
+                env=env
             )
             
             # Start stdio connection
@@ -90,11 +180,15 @@ class MCPClientManager:
                 self.tool_to_server[tool.name] = server_config.name
                 logger.debug(f"  Registered tool: {tool.name}")
             
-            logger.info(f"Connected to {server_config.name}: {len(tools_list.tools)} tools")
+            logger.info(f"✓ Connected to {server_config.name}: {len(tools_list.tools)} tools")
             return True
             
+        except ValueError as e:
+            # Configuration errors
+            logger.error(f"✗ Config error for {server_config.name}: {e}")
+            return False
         except Exception as e:
-            logger.error(f"Failed to connect to {server_config.name}: {e}")
+            logger.error(f"✗ Failed to connect to {server_config.name}: {e}")
             import traceback
             logger.debug(traceback.format_exc())
             return False

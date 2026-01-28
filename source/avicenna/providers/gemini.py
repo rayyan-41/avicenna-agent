@@ -1,14 +1,44 @@
-"""Gemini Provider with MCP Integration"""
+"""Gemini Provider with MCP Integration - Version 2.0"""
 import logging
 import time
-from typing import Optional
+from typing import Optional, Dict, List, Tuple
+from dataclasses import dataclass
 from google import genai
 from google.genai import types
 from . import LLMProvider
 from mcp_servers.mcp_client import MCPClientManager
+from mcp_servers.mcp_config_schema import MCPServerConfig
 from ..config import Config
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ServerStatus:
+    """Status information for an MCP server"""
+    name: str
+    server_type: str
+    enabled: bool
+    connected: bool
+    tool_count: int
+    error: Optional[str] = None
+
+
+@dataclass
+class MCPInitResult:
+    """Result of MCP initialization"""
+    server_statuses: List[ServerStatus]
+    total_tools: int
+    tools_by_server: Dict[str, List[str]]
+    
+    @property
+    def connected_count(self) -> int:
+        return sum(1 for s in self.server_statuses if s.connected)
+    
+    @property
+    def enabled_count(self) -> int:
+        return sum(1 for s in self.server_statuses if s.enabled)
+
 
 class GeminiProvider(LLMProvider):
     """Gemini implementation using MCP for tool execution"""
@@ -20,12 +50,16 @@ class GeminiProvider(LLMProvider):
         self.mcp_manager: Optional[MCPClientManager] = None
         self.chat = None
         self.config = None
+        self.mcp_init_result: Optional[MCPInitResult] = None
     
-    async def initialize(self):
+    async def initialize(self) -> MCPInitResult:
         """
         Async initialization - connects to MCP servers and discovers tools
         
-        Must be called before using the provider
+        Must be called before using the provider.
+        
+        Returns:
+            MCPInitResult with detailed status of each server
         """
         # Load MCP configuration
         mcp_config = Config.load_mcp_config()
@@ -33,21 +67,71 @@ class GeminiProvider(LLMProvider):
         # Create MCP client manager
         self.mcp_manager = MCPClientManager()
         
-        # Connect to all servers
-        logger.info("Connecting to MCP servers...")
-        connection_results = await self.mcp_manager.connect_all(mcp_config.servers)
+        # Track server statuses
+        server_statuses: List[ServerStatus] = []
         
-        # Report connection status
-        for server_name, success in connection_results.items():
-            if success:
-                logger.debug(f"  Connected: {server_name}")
-            else:
-                logger.warning(f"  Failed: {server_name}")
+        # Connect to all servers and track results
+        logger.info("Connecting to MCP servers...")
+        
+        for server_config in mcp_config.servers:
+            if not server_config.enabled:
+                server_statuses.append(ServerStatus(
+                    name=server_config.name,
+                    server_type=server_config.type,
+                    enabled=False,
+                    connected=False,
+                    tool_count=0,
+                    error="Disabled in config"
+                ))
+                continue
+            
+            # Get tool count before connection
+            tools_before = set(self.mcp_manager.tools.keys())
+            
+            try:
+                success = await self.mcp_manager.connect_server(server_config)
+                
+                # Calculate tools added by this server
+                tools_after = set(self.mcp_manager.tools.keys())
+                new_tools = tools_after - tools_before
+                
+                server_statuses.append(ServerStatus(
+                    name=server_config.name,
+                    server_type=server_config.type,
+                    enabled=True,
+                    connected=success,
+                    tool_count=len(new_tools) if success else 0,
+                    error=None if success else "Connection failed"
+                ))
+                
+            except Exception as e:
+                server_statuses.append(ServerStatus(
+                    name=server_config.name,
+                    server_type=server_config.type,
+                    enabled=True,
+                    connected=False,
+                    tool_count=0,
+                    error=str(e)
+                ))
+        
+        # Build tools by server mapping
+        tools_by_server = {}
+        for tool_name, server_name in self.mcp_manager.tool_to_server.items():
+            if server_name not in tools_by_server:
+                tools_by_server[server_name] = []
+            tools_by_server[server_name].append(tool_name)
+        
+        # Create result
+        self.mcp_init_result = MCPInitResult(
+            server_statuses=server_statuses,
+            total_tools=len(self.mcp_manager.tools),
+            tools_by_server=tools_by_server
+        )
         
         # Get tools in Gemini format
         gemini_tools = self.mcp_manager.get_gemini_tools()
         
-        logger.info(f"Loaded {len(self.mcp_manager.list_available_tools())} tools from MCP servers")
+        logger.info(f"Loaded {self.mcp_init_result.total_tools} tools from {self.mcp_init_result.connected_count} servers")
         
         # Configure chat with discovered tools
         self.config = types.GenerateContentConfig(
@@ -64,6 +148,8 @@ class GeminiProvider(LLMProvider):
             model=self.model_name,
             config=self.config
         )
+        
+        return self.mcp_init_result
     
     async def send_message(self, message: str, timeout: int = 30, max_retries: int = 3) -> str:
         """
