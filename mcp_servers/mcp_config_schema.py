@@ -165,61 +165,49 @@ class MCPConfiguration:
                     enabled=True,
                     description="Enhanced step-by-step reasoning for complex problems"
                 ),
-                # Web Fetch - requires playwright
+                # Puppeteer - Browser Automation (OFFICIAL MICROSOFT)
                 MCPServerConfig(
-                    name="fetch",
+                    name="playwright",
                     type=SERVER_TYPE_NODE,
-                    package="mcp-server-fetch-typescript",
-                    enabled=False,  # Requires playwright setup
-                    description="Fetch and extract content from web pages (requires: npx playwright install)"
+                    package="@microsoft/playwright-mcp",
+                    enabled=True,
+                    description="Official Microsoft Playwright browser automation: screenshots, navigation, scraping (run 'npx playwright install' first)"
                 ),
-                # Web Search - requires API key
-                MCPServerConfig(
-                    name="brave-search",
-                    type=SERVER_TYPE_NODE,
-                    package="@modelcontextprotocol/server-brave-search",
-                    enabled=False,  # Requires API key
-                    description="Web search via Brave Search API (requires BRAVE_API_KEY)",
-                    env={"BRAVE_API_KEY": ""}
-                ),
-                # Google Workspace - Gmail, Calendar, Drive, Docs, Sheets, etc.
+                # Google Workspace - Gmail, Calendar, Drive, Docs, Sheets, Slides
                 MCPServerConfig(
                     name="google-workspace",
                     type=SERVER_TYPE_EXECUTABLE,
                     command="uvx",
                     args=["workspace-mcp"],
-                    enabled=False,  # Requires OAuth credentials
-                    description="Full Google Workspace access: Gmail, Calendar, Drive, Docs, Sheets, Slides, Forms, Tasks, Chat (requires GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET)",
+                    enabled=True,
+                    description="Full Google Workspace: Gmail, Calendar, Drive, Docs, Sheets, Slides (requires GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET)",
                     env={
                         "GOOGLE_OAUTH_CLIENT_ID": "",
-                        "GOOGLE_OAUTH_CLIENT_SECRET": "",
-                        "OAUTHLIB_INSECURE_TRANSPORT": "1"
+                        "GOOGLE_OAUTH_CLIENT_SECRET": ""
                     }
                 ),
-                # SQLite Database
+                # Web Search - SerpAPI (Multi-Engine Search)
                 MCPServerConfig(
-                    name="sqlite",
-                    type=SERVER_TYPE_NODE,
-                    package="@modelcontextprotocol/server-sqlite",
-                    enabled=True,
-                    description="Query and manage SQLite databases"
+                    name="serpapi-search",
+                    type=SERVER_TYPE_EXECUTABLE,
+                    command="uvx",
+                    args=["serpapi-mcp"],
+                    enabled=False,
+                    description="Multi-engine search (Google, Bing, DuckDuckGo, YouTube) via SerpAPI (requires SERPAPI_API_KEY)",
+                    env={"SERPAPI_API_KEY": ""}
                 ),
-                # Git Operations
+                # Gmail - Working Google Workspace Component
                 MCPServerConfig(
-                    name="git",
-                    type=SERVER_TYPE_NODE,
-                    package="@modelcontextprotocol/server-git",
+                    name="gmail",
+                    type=SERVER_TYPE_PYTHON,
+                    script="tools/gmail.py",
                     enabled=True,
-                    description="Git operations: status, diff, commit, log, etc."
-                ),
-                # GitHub API
-                MCPServerConfig(
-                    name="github",
-                    type=SERVER_TYPE_NODE,
-                    package="@modelcontextprotocol/server-github",
-                    enabled=False,  # Requires personal access token
-                    description="GitHub API access: repos, issues, PRs (requires GITHUB_TOKEN)",
-                    env={"GITHUB_TOKEN": ""}
+                    description="Gmail integration: send, read, search emails (requires GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET)",
+                    env={
+                        "GOOGLE_API_KEY": "",
+                        "GOOGLE_OAUTH_CLIENT_ID": "",
+                        "GOOGLE_OAUTH_CLIENT_SECRET": ""
+                    }
                 ),
                 # Legacy Python servers (deprecated)
                 MCPServerConfig(

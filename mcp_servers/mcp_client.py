@@ -147,7 +147,11 @@ class MCPClientManager:
             # Merge environment variables
             env = os.environ.copy()
             if server_config.env:
-                env.update(server_config.env)
+                # Only add non-empty values from server config
+                # This allows .env file values to pass through
+                for key, value in server_config.env.items():
+                    if value:  # Only set if not empty string
+                        env[key] = value
             
             # Configure server parameters
             server_params = StdioServerParameters(
@@ -279,25 +283,128 @@ class MCPClientManager:
     
     def _convert_schema(self, json_schema: dict) -> dict:
         """
-        Convert JSON Schema to Gemini parameter format
+        Convert JSON Schema to Gemini-compatible parameter format
         
-        MCP uses JSON Schema, Gemini uses a similar but different format
+        Handles complex schemas that Gemini 2.5-flash rejects:
+        - anyOf with const values -> enum
+        - oneOf with const values -> enum
+        - Removes unsupported JSON Schema keywords
+        - Preserves nested properties and arrays
+        
+        This fixes the "anyOf.0.const Extra inputs are not permitted" error
         """
         if not json_schema:
             return {"type": "object", "properties": {}}
         
-        # Basic conversion - JSON Schema and Gemini format are similar
-        # May need refinement for complex schemas
+        def convert_property(prop_schema: dict) -> dict:
+            """Recursively convert a property schema to Gemini format"""
+            
+            # Handle anyOf with const values -> convert to enum
+            if "anyOf" in prop_schema:
+                const_values = []
+                prop_type = None
+                
+                for option in prop_schema["anyOf"]:
+                    if "const" in option:
+                        const_values.append(option["const"])
+                        # Infer type from const value
+                        if prop_type is None:
+                            if isinstance(option["const"], bool):
+                                prop_type = "boolean"
+                            elif isinstance(option["const"], int):
+                                prop_type = "integer"
+                            elif isinstance(option["const"], float):
+                                prop_type = "number"
+                            else:
+                                prop_type = "string"
+                
+                if const_values:
+                    # Convert anyOf[{const}] to enum
+                    return {
+                        "type": prop_type or prop_schema.get("type", "string"),
+                        "enum": const_values,
+                        "description": prop_schema.get("description", "")
+                    }
+            
+            # Handle oneOf similarly
+            if "oneOf" in prop_schema:
+                const_values = []
+                prop_type = None
+                
+                for option in prop_schema["oneOf"]:
+                    if "const" in option:
+                        const_values.append(option["const"])
+                        if prop_type is None:
+                            if isinstance(option["const"], bool):
+                                prop_type = "boolean"
+                            elif isinstance(option["const"], int):
+                                prop_type = "integer"
+                            elif isinstance(option["const"], float):
+                                prop_type = "number"
+                            else:
+                                prop_type = "string"
+                
+                if const_values:
+                    return {
+                        "type": prop_type or prop_schema.get("type", "string"),
+                        "enum": const_values,
+                        "description": prop_schema.get("description", "")
+                    }
+            
+            # Start with a clean schema
+            cleaned = {}
+            
+            # Copy only Gemini-supported keywords
+            # Gemini supports: type, description, enum, default, format, minimum, maximum, items, properties, required
+            safe_keywords = [
+                "type", "description", "enum", "default", "format",
+                "minimum", "maximum", "minLength", "maxLength"
+            ]
+            
+            for key in safe_keywords:
+                if key in prop_schema:
+                    cleaned[key] = prop_schema[key]
+            
+            # Default to string if no type specified
+            if "type" not in cleaned:
+                cleaned["type"] = "string"
+            
+            # Handle nested object properties
+            if "properties" in prop_schema:
+                cleaned["properties"] = {}
+                for prop_name, nested_schema in prop_schema["properties"].items():
+                    cleaned["properties"][prop_name] = convert_property(nested_schema)
+            
+            # Handle array items
+            if "items" in prop_schema:
+                if cleaned.get("type") == "array":
+                    cleaned["items"] = convert_property(prop_schema["items"])
+            
+            return cleaned
+        
+        # Convert root schema
         converted = {
             "type": json_schema.get("type", "object"),
         }
         
+        # Convert all properties
         if "properties" in json_schema:
-            converted["properties"] = json_schema["properties"]
+            converted["properties"] = {}
+            for prop_name, prop_schema in json_schema["properties"].items():
+                try:
+                    converted["properties"][prop_name] = convert_property(prop_schema)
+                except Exception as e:
+                    logger.warning(f"Failed to convert property '{prop_name}': {e}")
+                    # Fallback to simple string type
+                    converted["properties"][prop_name] = {
+                        "type": "string",
+                        "description": prop_schema.get("description", f"Property: {prop_name}")
+                    }
         
+        # Copy required fields
         if "required" in json_schema:
             converted["required"] = json_schema["required"]
-            
+        
         return converted
     
     def list_available_tools(self) -> List[str]:
