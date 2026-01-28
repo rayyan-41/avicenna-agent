@@ -178,9 +178,48 @@ class MCPConfiguration:
                     name="brave-search",
                     type=SERVER_TYPE_NODE,
                     package="@modelcontextprotocol/server-brave-search",
-                    enabled=False,  # Deprecated but still works with API key
+                    enabled=False,  # Requires API key
                     description="Web search via Brave Search API (requires BRAVE_API_KEY)",
                     env={"BRAVE_API_KEY": ""}
+                ),
+                # Google Workspace - Gmail, Calendar, Drive, Docs, Sheets, etc.
+                MCPServerConfig(
+                    name="google-workspace",
+                    type=SERVER_TYPE_EXECUTABLE,
+                    command="uvx",
+                    args=["workspace-mcp"],
+                    enabled=False,  # Requires OAuth credentials
+                    description="Full Google Workspace access: Gmail, Calendar, Drive, Docs, Sheets, Slides, Forms, Tasks, Chat (requires GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET)",
+                    env={
+                        "GOOGLE_OAUTH_CLIENT_ID": "",
+                        "GOOGLE_OAUTH_CLIENT_SECRET": "",
+                        "OAUTHLIB_INSECURE_TRANSPORT": "1"
+                    }
+                ),
+                # SQLite Database
+                MCPServerConfig(
+                    name="sqlite",
+                    type=SERVER_TYPE_NODE,
+                    package="@modelcontextprotocol/server-sqlite",
+                    enabled=True,
+                    description="Query and manage SQLite databases"
+                ),
+                # Git Operations
+                MCPServerConfig(
+                    name="git",
+                    type=SERVER_TYPE_NODE,
+                    package="@modelcontextprotocol/server-git",
+                    enabled=True,
+                    description="Git operations: status, diff, commit, log, etc."
+                ),
+                # GitHub API
+                MCPServerConfig(
+                    name="github",
+                    type=SERVER_TYPE_NODE,
+                    package="@modelcontextprotocol/server-github",
+                    enabled=False,  # Requires personal access token
+                    description="GitHub API access: repos, issues, PRs (requires GITHUB_TOKEN)",
+                    env={"GITHUB_TOKEN": ""}
                 ),
                 # Legacy Python servers (deprecated)
                 MCPServerConfig(

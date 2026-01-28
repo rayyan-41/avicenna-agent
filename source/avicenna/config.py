@@ -34,6 +34,16 @@ class Config:
     # You can change this in your .env file without touching code.
     MODEL_NAME: str = os.getenv("AVICENNA_MODEL", "gemini-2.0-flash")
     
+    # Google OAuth credentials for workspace-mcp
+    GOOGLE_OAUTH_CLIENT_ID: Optional[str] = os.getenv("GOOGLE_OAUTH_CLIENT_ID")
+    GOOGLE_OAUTH_CLIENT_SECRET: Optional[str] = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET")
+    
+    # Brave Search API key for search MCP server
+    BRAVE_API_KEY: Optional[str] = os.getenv("BRAVE_API_KEY")
+    
+    # GitHub Personal Access Token for GitHub MCP server
+    GITHUB_TOKEN: Optional[str] = os.getenv("GITHUB_TOKEN")
+    
     # MCP Configuration
     MCP_CONFIG_PATH = Path.home() / '.avicenna' / 'mcp_config.json'
     
