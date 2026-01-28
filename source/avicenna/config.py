@@ -30,9 +30,9 @@ class Config:
     API_KEY: Optional[str] = os.getenv("GOOGLE_API_KEY")
     
     # The Model Name
-    # We default to 'gemini-2.0-flash-exp' for speed during development.
+    # We default to 'gemini-2.0-flash' for speed and reliability.
     # You can change this in your .env file without touching code.
-    MODEL_NAME: str = os.getenv("AVICENNA_MODEL", "gemini-2.0-flash-exp")
+    MODEL_NAME: str = os.getenv("AVICENNA_MODEL", "gemini-2.0-flash")
     
     # MCP Configuration
     MCP_CONFIG_PATH = Path.home() / '.avicenna' / 'mcp_config.json'
