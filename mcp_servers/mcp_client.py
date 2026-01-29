@@ -216,13 +216,14 @@ class MCPClientManager:
         
         return results
     
-    async def call_tool(self, tool_name: str, arguments: dict) -> str:
+    async def call_tool(self, tool_name: str, arguments: dict, user_email_provider=None) -> str:
         """
         Call a tool via its MCP server
         
         Args:
             tool_name: Name of the tool to call
             arguments: Dictionary of arguments to pass
+            user_email_provider: Optional callable that returns user's Google email when needed
             
         Returns:
             Tool result as string
@@ -235,6 +236,26 @@ class MCPClientManager:
         
         if not session:
             raise RuntimeError(f"Server not connected: {server_name}")
+        
+        # Auto-inject user_google_email for workspace-mcp tools if needed
+        if server_name == "google-workspace":
+            tool = self.tools.get(tool_name)
+            if tool and hasattr(tool, 'inputSchema'):
+                schema = tool.inputSchema
+                # Check if tool requires user_google_email and it's not provided
+                if (isinstance(schema, dict) and 
+                    'required' in schema and 
+                    'user_google_email' in schema.get('required', []) and
+                    'user_google_email' not in arguments):
+                    
+                    # Try to get email from provider
+                    if user_email_provider and callable(user_email_provider):
+                        email = user_email_provider()
+                        if email:
+                            arguments = {**arguments, 'user_google_email': email}
+                            logger.info(f"Auto-injected user_google_email for {tool_name}")
+                        else:
+                            logger.warning(f"Tool {tool_name} requires user_google_email but none available")
         
         logger.info(f"Calling tool {tool_name} on server {server_name}")
         logger.debug(f"Arguments: {arguments}")

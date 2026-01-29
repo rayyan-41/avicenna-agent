@@ -44,8 +44,12 @@ class Config:
     # GitHub Personal Access Token for GitHub MCP server
     GITHUB_TOKEN: Optional[str] = os.getenv("GITHUB_TOKEN")
     
+    # User email for Google Workspace (optional override in .env)
+    GOOGLE_USER_EMAIL: Optional[str] = os.getenv("GOOGLE_USER_EMAIL")
+    
     # MCP Configuration
     MCP_CONFIG_PATH = Path.home() / '.avicenna' / 'mcp_config.json'
+    USER_CONFIG_PATH = Path.home() / '.avicenna' / 'user_config.json'
     
     @classmethod
     def load_mcp_config(cls) -> MCPConfiguration:
@@ -61,6 +65,58 @@ class Config:
         except Exception as e:
             console.print(f"[yellow]⚠️ Error loading MCP config, using defaults:[/yellow] {e}")
             return MCPConfiguration.default()
+    
+    @classmethod
+    def load_user_config(cls) -> dict:
+        """Load user configuration (email, preferences, etc.)"""
+        import json
+        
+        if not cls.USER_CONFIG_PATH.exists():
+            return {}
+        
+        try:
+            with open(cls.USER_CONFIG_PATH, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            console.print(f"[yellow]⚠️ Error loading user config:[/yellow] {e}")
+            return {}
+    
+    @classmethod
+    def save_user_config(cls, config: dict):
+        """Save user configuration"""
+        import json
+        
+        cls.USER_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        
+        try:
+            with open(cls.USER_CONFIG_PATH, 'w') as f:
+                json.dump(config, f, indent=2)
+        except Exception as e:
+            console.print(f"[red]✗ Error saving user config:[/red] {e}")
+    
+    @classmethod
+    def get_google_user_email(cls) -> Optional[str]:
+        """
+        Get Google user email with smart fallback:
+        1. Check .env GOOGLE_USER_EMAIL (allows override)
+        2. Check user_config.json (saved from previous sessions)
+        3. Return None (will prompt user when needed)
+        """
+        # Priority 1: .env file (explicit override)
+        if cls.GOOGLE_USER_EMAIL:
+            return cls.GOOGLE_USER_EMAIL
+        
+        # Priority 2: User config (saved from previous session)
+        user_config = cls.load_user_config()
+        return user_config.get('google_user_email')
+    
+    @classmethod
+    def set_google_user_email(cls, email: str):
+        """Save Google user email to user config"""
+        user_config = cls.load_user_config()
+        user_config['google_user_email'] = email
+        cls.save_user_config(user_config)
+        console.print(f"[green]✓ Saved Google email to user config[/green]")
     
     @classmethod
     def validate(cls) -> bool:

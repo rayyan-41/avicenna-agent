@@ -178,7 +178,7 @@ class MCPConfiguration:
                     name="google-workspace",
                     type=SERVER_TYPE_EXECUTABLE,
                     command="uvx",
-                    args=["workspace-mcp"],
+                    args=["workspace-mcp", "--single-user"],
                     enabled=True,
                     description="Full Google Workspace: Gmail, Calendar, Drive, Docs, Sheets, Slides (requires GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET)",
                     env={

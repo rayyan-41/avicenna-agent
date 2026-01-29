@@ -51,6 +51,44 @@ class GeminiProvider(LLMProvider):
         self.chat = None
         self.config = None
         self.mcp_init_result: Optional[MCPInitResult] = None
+        self._google_email_cache: Optional[str] = None  # Cache for session
+    
+    def _get_google_user_email(self) -> Optional[str]:
+        """
+        Get Google user email with smart fallback and one-time prompting.
+        Returns None if user declines to provide email.
+        """
+        # Return cached value if available (avoid re-prompting in same session)
+        if self._google_email_cache:
+            return self._google_email_cache
+        
+        # Try to get from config (env or saved)
+        email = Config.get_google_user_email()
+        
+        if not email:
+            # Prompt user once per session
+            from rich.console import Console
+            from rich.prompt import Prompt
+            
+            console = Console()
+            console.print("\n[yellow]⚙️  Google Workspace Setup[/yellow]")
+            console.print("[dim]To use Google Calendar, Gmail, Drive, etc., please provide your Google email.[/dim]")
+            console.print("[dim]This will be saved for future sessions. You can change it anytime in ~/.avicenna/user_config.json[/dim]\n")
+            
+            email = Prompt.ask("[cyan]Enter your Google email address[/cyan]", default="")
+            
+            if email:
+                # Save to user config
+                Config.set_google_user_email(email)
+                self._google_email_cache = email
+            else:
+                console.print("[yellow]⚠️  Skipping Google Workspace setup. You can configure this later.[/yellow]")
+                return None
+        else:
+            # Cache it for this session
+            self._google_email_cache = email
+        
+        return email
     
     async def initialize(self) -> MCPInitResult:
         """
@@ -208,7 +246,8 @@ class GeminiProvider(LLMProvider):
                                 try:
                                     result = await self.mcp_manager.call_tool(
                                         function_name, 
-                                        function_args
+                                        function_args,
+                                        user_email_provider=self._get_google_user_email
                                     )
                                 except ValueError as e:
                                     logger.error(f"Unknown tool: {function_name}")
