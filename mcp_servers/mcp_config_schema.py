@@ -183,7 +183,8 @@ class MCPConfiguration:
                     description="Full Google Workspace: Gmail, Calendar, Drive, Docs, Sheets, Slides (requires GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET)",
                     env={
                         "GOOGLE_OAUTH_CLIENT_ID": "",
-                        "GOOGLE_OAUTH_CLIENT_SECRET": ""
+                        "GOOGLE_OAUTH_CLIENT_SECRET": "",
+                        "OAUTHLIB_INSECURE_TRANSPORT": "1"  # Required for http://localhost OAuth callbacks
                     }
                 ),
                 # Web Search - SerpAPI (Multi-Engine Search)

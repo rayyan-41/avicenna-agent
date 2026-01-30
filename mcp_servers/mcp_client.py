@@ -146,9 +146,14 @@ class MCPClientManager:
             
             # Merge environment variables
             env = os.environ.copy()
+            
+            # CRITICAL: Set OAUTHLIB_INSECURE_TRANSPORT for Google OAuth with http://localhost
+            # Without this, OAuth will fail with "InvalidOAuthRedirectSchemeError"
+            env["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+            
             if server_config.env:
                 # Only add non-empty values from server config
-                # This allows .env file values to pass through
+                # Empty strings indicate "use value from .env/environment" (don't override!)
                 for key, value in server_config.env.items():
                     if value:  # Only set if not empty string
                         env[key] = value
