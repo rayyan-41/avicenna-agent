@@ -4,15 +4,15 @@
 
 A constitutional AI agent built on the Model Context Protocol (MCP), named after the Persian polymath Ibn Sina (Avicenna). Now integrated with the official MCP ecosystem for powerful, extensible tooling.
 
-## ✨ What's New in Version 2.0
+## What's New in Version 2.0
 
-- **🌐 MCP Ecosystem Integration**: Connect to official MCP servers from the community
-- **📦 Node.js Server Support**: Run npm packages directly via `npx`
-- **📁 Filesystem Operations**: 14 file/directory tools for local file access
-- **🧠 Sequential Thinking**: Enhanced reasoning for complex problems
-- **📊 Server Status Display**: See which servers are connected at startup
-- **⚙️ Multi-Type Servers**: Support for Python, Node.js, and executable servers
-- **🔧 Better Configuration**: Version-aware config with backward compatibility
+- **MCP Ecosystem Integration**: Connect to official MCP servers from the community
+- **Node.js Server Support**: Run npm packages directly via `npx`
+- **Filesystem Operations**: 14 file/directory tools for local file access
+- **Sequential Thinking**: Enhanced reasoning for complex problems
+- **Server Status Display**: See which servers are connected at startup
+- **Multi-Type Servers**: Support for Python, Node.js, and executable servers
+- **Better Configuration**: Version-aware config with backward compatibility
 
 ## Features
 
@@ -22,25 +22,6 @@ A constitutional AI agent built on the Model Context Protocol (MCP), named after
 - **Async Design**: Modern async/await Python architecture
 - **Retro Terminal UI**: Green-on-black aesthetic with Rich formatting
 - **Auto-Discovery**: Tools are automatically discovered from connected servers
-
-### Available MCP Servers
-
-#### Default (Enabled)
-- **📁 Filesystem** (`@modelcontextprotocol/server-filesystem`) - 14 tools
-  - Read/write files, create directories, search files, file info, directory trees
-  - Configure allowed directories in config for security
-  
-- **🧠 Sequential Thinking** (`@modelcontextprotocol/server-sequential-thinking`) - 1 tool
-  - Enhanced multi-step reasoning for complex problems
-
-#### Optional (Disabled by Default)
-- **🌐 Fetch** (`mcp-server-fetch-typescript`)
-  - Web content fetching and extraction
-  - Requires: `npx playwright install`
-  
-- **🔍 Brave Search** (`@modelcontextprotocol/server-brave-search`)
-  - Web search via Brave Search API
-  - Requires: `BRAVE_API_KEY` environment variable
 
 ## Installation
 
@@ -394,25 +375,7 @@ Avicenna operates under these principles:
   - Custom Python servers (basic, gmail)
   - Gmail integration with OAuth
   - Constitutional AI framework
-
-## License
-
-MIT
-
-## Credits
-
-Created by CLANCY-41
-
-Named after Ibn Sina (Avicenna), the Persian polymath whose synthesis of reason and wisdom revolutionized medieval thought.
-
-## Contributing
-
-Contributions welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
-
+    
 ## Links
 
 - [Model Context Protocol](https://modelcontextprotocol.io)
@@ -420,6 +383,3 @@ Contributions welcome! Please:
 - [Gemini API Documentation](https://ai.google.dev/docs)
 
 ---
-
-**Avicenna v2.0** - Because even AI agents benefit from a rich ecosystem.
-
