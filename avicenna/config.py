@@ -135,4 +135,7 @@ class Config:
 # This runs as soon as this file is imported anywhere.
 # It gives immediate feedback if the key is missing.
 if not Config.API_KEY:
-    console.print("[yellow]⚠️  Warning: Config loaded but API Key is missing.[/yellow]")
+    try:
+        console.print("[yellow]Warning: Config loaded but API Key is missing.[/yellow]")
+    except UnicodeEncodeError:
+        pass

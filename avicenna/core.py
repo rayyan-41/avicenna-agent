@@ -1,8 +1,10 @@
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 from rich.console import Console
 from rich.table import Table
 from .config import Config
-from .providers.gemini import GeminiProvider, MCPInitResult
+
+if TYPE_CHECKING:
+    from .providers.gemini import GeminiProvider, MCPInitResult
 
 console = Console()
 
@@ -11,7 +13,7 @@ NEON_GREEN = "#00ff00"
 DARK_GREEN = "#005500"
 
 
-def display_mcp_status(result: MCPInitResult):
+def display_mcp_status(result: "MCPInitResult"):
     """Display MCP server connection status in a formatted table"""
     
     # Create status table
@@ -128,6 +130,7 @@ class AvicennaAgent:
         )
 
         # Create provider (not initialized yet)
+        from .providers.gemini import GeminiProvider
         self.ai = GeminiProvider(
             api_key=Config.API_KEY,
             model_name=Config.MODEL_NAME,

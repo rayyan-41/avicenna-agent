@@ -18,8 +18,6 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.types import Tool as MCPTool
 
-from google.genai import types as genai_types
-
 from avicenna.mcp.mcp_config_schema import (
     MCPServerConfig,
     SERVER_TYPE_PYTHON,
@@ -281,30 +279,29 @@ class MCPClientManager:
         
         return str(result) if result else "Tool execution completed with no output."
     
-    def get_gemini_tools(self) -> List[genai_types.Tool]:
+    def get_gemini_tools(self) -> List:
         """
-        Convert MCP tools to Gemini Tool format
-        
+        Convert MCP tools to Gemini Tool format.
+
         Returns:
             List of Gemini Tool objects
         """
-        # Group tools by converting each MCP tool to a FunctionDeclaration
+        from google.genai import types as genai_types
+
         function_declarations = []
-        
+
         for tool_name, mcp_tool in self.tools.items():
-            # Convert MCP tool to Gemini FunctionDeclaration
             function_decl = genai_types.FunctionDeclaration(
                 name=mcp_tool.name,
                 description=mcp_tool.description or f"Tool: {mcp_tool.name}",
                 parameters=self._convert_schema(mcp_tool.inputSchema)
             )
-            
+
             function_declarations.append(function_decl)
-        
-        # Gemini expects all function declarations in a single Tool object
+
         if function_declarations:
             return [genai_types.Tool(function_declarations=function_declarations)]
-        
+
         return []
     
     def _convert_schema(self, json_schema: dict) -> dict:

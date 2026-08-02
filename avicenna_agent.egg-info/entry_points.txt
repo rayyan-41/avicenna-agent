@@ -1,2 +1,2 @@
 [console_scripts]
-avicenna = source.avicenna.main:app
+avicenna = avicenna.cli.app:main
