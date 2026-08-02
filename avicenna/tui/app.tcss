@@ -1,0 +1,74 @@
+# avicenna/tui/app.tcss
+
+# Two-pane layout
+#body {
+    layout: horizontal;
+    height: 1fr;
+}
+
+#meta {
+    width: 36%;
+    min-width: 38;
+    border-right: solid $primary-darken-2;
+    padding: 0 1;
+}
+
+#chat {
+    width: 1fr;
+    padding: 0 1;
+}
+
+#chat-input {
+    dock: bottom;
+    border-top: solid $primary-darken-2;
+    padding: 0 1;
+}
+
+HeadingGrid {
+    height: 1fr;
+    min-height: 8;
+}
+
+.stage-current {
+    color: $success;
+    text-style: bold;
+}
+
+.stage-done {
+    color: $text-muted;
+}
+
+.pipeline-line {
+    color: $text-muted;
+}
+
+.chat-user {
+    color: $accent;
+    text-style: bold;
+}
+
+.chat-assistant {
+    color: $text;
+}
+
+.chat-error {
+    color: $error;
+}
+
+.vault-card {
+    border: solid $primary-darken-2;
+    padding: 0 1;
+    margin-bottom: 1;
+}
+
+.status-ok {
+    color: $success;
+}
+
+.status-warn {
+    color: $warning;
+}
+
+.status-error {
+    color: $error;
+}
