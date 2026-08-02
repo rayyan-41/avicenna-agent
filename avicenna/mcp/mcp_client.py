@@ -279,6 +279,22 @@ class MCPClientManager:
         
         return str(result) if result else "Tool execution completed with no output."
     
+    def tool_specs(self):
+        """Return neutral ToolSpec objects from discovered MCP tools.
+
+        This is the vendor-neutral export path; each provider converts at its edge.
+        """
+        from avicenna.providers.base import ToolSpec
+
+        specs = []
+        for tool_name, mcp_tool in self.tools.items():
+            specs.append(ToolSpec(
+                name=mcp_tool.name,
+                description=mcp_tool.description or "",
+                parameters=mcp_tool.inputSchema if hasattr(mcp_tool, 'inputSchema') else {},
+            ))
+        return specs
+
     def get_gemini_tools(self) -> List:
         """
         Convert MCP tools to Gemini Tool format.

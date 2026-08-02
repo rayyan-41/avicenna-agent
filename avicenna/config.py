@@ -1,6 +1,5 @@
 import os
 from pathlib import Path
-from typing import Optional
 from dotenv import load_dotenv
 from rich.console import Console
 from avicenna.mcp.mcp_config_schema import MCPConfiguration
@@ -26,26 +25,29 @@ class Config:
     never by calling os.getenv() directly in other files.
     """
     
-    # The Google API Key for Gemini
-    API_KEY: Optional[str] = os.getenv("GOOGLE_API_KEY")
+    # Legacy API Key (Google — kept as fallback so existing .env files don't break)
+    API_KEY: str | None = os.getenv("GOOGLE_API_KEY")
     
-    # The Model Name
-    # We default to 'gemini-2.0-flash' for speed and reliability.
-    # You can change this in your .env file without touching code.
+    # Mistral provider settings
+    LLM_PROVIDER: str = os.getenv("AVICENNA_PROVIDER", "mistral")
+    MISTRAL_API_KEY: str | None = os.getenv("MISTRAL_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    MISTRAL_MODEL: str = os.getenv("MISTRAL_MODEL", "mistral-large-latest")
+    
+    # Legacy Model Name (kept as fallback)
     MODEL_NAME: str = os.getenv("AVICENNA_MODEL", "gemini-2.0-flash")
     
     # Google OAuth credentials for workspace-mcp
-    GOOGLE_OAUTH_CLIENT_ID: Optional[str] = os.getenv("GOOGLE_OAUTH_CLIENT_ID")
-    GOOGLE_OAUTH_CLIENT_SECRET: Optional[str] = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET")
+    GOOGLE_OAUTH_CLIENT_ID: str | None = os.getenv("GOOGLE_OAUTH_CLIENT_ID")
+    GOOGLE_OAUTH_CLIENT_SECRET: str | None = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET")
     
     # Brave Search API key for search MCP server
-    BRAVE_API_KEY: Optional[str] = os.getenv("BRAVE_API_KEY")
+    BRAVE_API_KEY: str | None = os.getenv("BRAVE_API_KEY")
     
     # GitHub Personal Access Token for GitHub MCP server
-    GITHUB_TOKEN: Optional[str] = os.getenv("GITHUB_TOKEN")
+    GITHUB_TOKEN: str | None = os.getenv("GITHUB_TOKEN")
     
     # User email for Google Workspace (optional override in .env)
-    GOOGLE_USER_EMAIL: Optional[str] = os.getenv("GOOGLE_USER_EMAIL")
+    GOOGLE_USER_EMAIL: str | None = os.getenv("GOOGLE_USER_EMAIL")
     
     # MCP Configuration
     MCP_CONFIG_PATH = Path.home() / '.avicenna' / 'mcp_config.json'

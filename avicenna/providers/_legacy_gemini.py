@@ -1,47 +1,26 @@
-"""Gemini Provider with MCP Integration - Version 2.0"""
+"""Legacy Gemini Provider — does NOT implement the current LLMProvider ABC.
+
+This module targets the old stateful chat contract and is NOT imported at
+package import time. Kept for reference; the Gemini-specific
+get_gemini_tools() / _convert_schema() logic lives here.
+"""
+
 import logging
 import time
 from typing import Optional, Dict, List, Tuple
 from dataclasses import dataclass
 from google import genai
 from google.genai import types
-from . import LLMProvider
 from ..mcp.mcp_client import MCPClientManager
 from ..mcp.mcp_config_schema import MCPServerConfig
+from ..mcp.state import MCPInitResult, ServerStatus
 from ..config import Config
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class ServerStatus:
-    """Status information for an MCP server"""
-    name: str
-    server_type: str
-    enabled: bool
-    connected: bool
-    tool_count: int
-    error: Optional[str] = None
-
-
-@dataclass
-class MCPInitResult:
-    """Result of MCP initialization"""
-    server_statuses: List[ServerStatus]
-    total_tools: int
-    tools_by_server: Dict[str, List[str]]
-    
-    @property
-    def connected_count(self) -> int:
-        return sum(1 for s in self.server_statuses if s.connected)
-    
-    @property
-    def enabled_count(self) -> int:
-        return sum(1 for s in self.server_statuses if s.enabled)
-
-
-class GeminiProvider(LLMProvider):
-    """Gemini implementation using MCP for tool execution"""
+class GeminiProvider:
+    """Legacy Gemini chat provider. Does NOT implement the new LLMProvider ABC."""
     
     def __init__(self, api_key: str, model_name: str, system_instruction: str) -> None:
         self.client = genai.Client(api_key=api_key)

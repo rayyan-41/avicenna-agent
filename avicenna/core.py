@@ -2,9 +2,10 @@ from typing import TYPE_CHECKING, Optional
 from rich.console import Console
 from rich.table import Table
 from .config import Config
+from .mcp.state import MCPInitResult
 
 if TYPE_CHECKING:
-    from .providers.gemini import GeminiProvider, MCPInitResult
+    from .providers._legacy_gemini import GeminiProvider
 
 console = Console()
 
@@ -130,7 +131,7 @@ class AvicennaAgent:
         )
 
         # Create provider (not initialized yet)
-        from .providers.gemini import GeminiProvider
+        from .providers._legacy_gemini import GeminiProvider
         self.ai = GeminiProvider(
             api_key=Config.API_KEY,
             model_name=Config.MODEL_NAME,
