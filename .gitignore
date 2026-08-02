@@ -39,3 +39,6 @@ logs/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Local IDE / tooling artifacts
+.commandcode/
