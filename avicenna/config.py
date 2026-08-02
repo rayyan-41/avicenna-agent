@@ -97,7 +97,7 @@ class Config:
             console.print(f"[red]✗ Error saving user config:[/red] {e}")
     
     @classmethod
-    def get_google_user_email(cls) -> Optional[str]:
+    def get_google_user_email(cls) -> str | None:
         """
         Get Google user email with smart fallback:
         1. Check .env GOOGLE_USER_EMAIL (allows override)
