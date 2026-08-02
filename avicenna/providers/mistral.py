@@ -10,15 +10,24 @@ import asyncio
 import json
 import random
 import time
-from typing import Any
+from typing import Any, cast
 
 from mistralai.client import Mistral as MistralClient
 from mistralai.client.models import (
     AssistantMessage,
+    ChatCompletionRequestMessage,
+    ChatCompletionRequestToolTypedDict,
+    FunctionCall,
     SystemMessage,
     ToolMessage,
     UserMessage,
 )
+from mistralai.client.models import ToolCall as WireToolCall
+
+# `Unset` is the class behind the SDK's UNSET sentinel. mistralai re-exports
+# only the UNSET instance from `mistralai.client.types`, so the class itself
+# has to come from the defining module for isinstance narrowing.
+from mistralai.client.types.basemodel import Unset
 
 from avicenna.providers.base import (
     Completion,
@@ -65,7 +74,9 @@ class MistralProvider(LLMProvider):
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> Completion:
-        wire_messages = [SystemMessage(content=system)]
+        wire_messages: list[ChatCompletionRequestMessage] = [
+            SystemMessage(content=system)
+        ]
         wire_messages += self._to_wire_messages(messages)
         wire_tools = self._to_wire_tools(tools) if tools else None
 
@@ -97,31 +108,63 @@ class MistralProvider(LLMProvider):
             choice = response.choices[0]
             finish = choice.finish_reason
 
-            text = choice.message.content
-            if isinstance(text, list):
+            message = choice.message
+            if message is None:
+                # complete() is non-streaming, so the API always populates
+                # `message`; the SDK types it Optional because the same choice
+                # model is reused for streaming deltas (`messages`).
+                raise ProviderError("provider returned a choice with no message")
+
+            # content is OptionalNullable[str | list[ContentChunk]]: it may be
+            # the SDK's UNSET sentinel, which is not a string. Narrow it here so
+            # the neutral Completion only ever carries str | None.
+            content = message.content
+            text: str | None
+            if isinstance(content, Unset):
+                text = None
+            elif isinstance(content, list):
                 text = "".join(
                     chunk if isinstance(chunk, str) else str(chunk)
-                    for chunk in text
+                    for chunk in content
                 )
+            else:
+                text = content
 
             tool_calls: tuple[ToolCall, ...] = ()
-            if choice.message.tool_calls:
+            if message.tool_calls:
                 tc_list: list[ToolCall] = []
-                for tc in choice.message.tool_calls:
+                for tc in message.tool_calls:
+                    # The SDK's Arguments alias is `dict | str`. This code only
+                    # supports the JSON-string form; a dict would raise TypeError
+                    # out of json.loads. Typed as Any to keep that behaviour
+                    # unchanged rather than silently altering it here.
+                    raw_arguments: Any = tc.function.arguments
                     try:
-                        args = json.loads(tc.function.arguments)
+                        args = json.loads(raw_arguments)
                     except json.JSONDecodeError:
                         raise BadRequestError(
                             f"tool call {tc.id!r} returned unparseable arguments"
                         )
-                    tc_list.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args))
+                    tc_list.append(
+                        ToolCall(
+                            # The SDK types `id` Optional, but the API always
+                            # sets it on a tool call; a missing id would break
+                            # result correlation anyway.
+                            id=cast(str, tc.id),
+                            name=tc.function.name,
+                            arguments=args,
+                        )
+                    )
                 tool_calls = tuple(tc_list)
 
             usage = (
                 Usage(
-                    prompt_tokens=response.usage.prompt_tokens,
-                    completion_tokens=response.usage.completion_tokens,
-                    total_tokens=response.usage.total_tokens,
+                    # UsageInfo declares these Optional[int] with a default of 0;
+                    # mirror that default instead of leaking None into Usage,
+                    # whose own fields are int-with-default-0.
+                    prompt_tokens=response.usage.prompt_tokens or 0,
+                    completion_tokens=response.usage.completion_tokens or 0,
+                    total_tokens=response.usage.total_tokens or 0,
                 )
                 if response.usage
                 else None
@@ -145,20 +188,27 @@ class MistralProvider(LLMProvider):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _to_wire_messages(messages: list[Message]) -> list:
-        out = []
+    def _to_wire_messages(
+        messages: list[Message],
+    ) -> list[ChatCompletionRequestMessage]:
+        out: list[ChatCompletionRequestMessage] = []
         for m in messages:
             if m.role == "user":
                 out.append(UserMessage(content=m.content))
             elif m.role == "assistant":
                 am = AssistantMessage(content=m.content or None)
                 if m.tool_calls:
-                    tc_list = [
-                        {"id": tc.id, "type": "function",
-                         "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)}}
+                    am.tool_calls = [
+                        WireToolCall(
+                            id=tc.id,
+                            type="function",
+                            function=FunctionCall(
+                                name=tc.name,
+                                arguments=json.dumps(tc.arguments),
+                            ),
+                        )
                         for tc in m.tool_calls
                     ]
-                    am.tool_calls = tc_list
                 out.append(am)
             elif m.role == "tool":
                 out.append(ToolMessage(
@@ -169,7 +219,9 @@ class MistralProvider(LLMProvider):
         return out
 
     @staticmethod
-    def _to_wire_tools(tools: list[ToolSpec]) -> list[dict[str, Any]]:
+    def _to_wire_tools(
+        tools: list[ToolSpec],
+    ) -> list[ChatCompletionRequestToolTypedDict]:
         return [
             {"type": "function", "function": {
                 "name": t.name,

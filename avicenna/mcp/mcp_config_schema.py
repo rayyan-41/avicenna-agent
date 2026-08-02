@@ -5,7 +5,7 @@ Supports multiple server types:
 - Node.js packages via npx (type: "node")
 - Direct executables (type: "executable")
 """
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 from pathlib import Path
 import json
@@ -62,9 +62,9 @@ class MCPServerConfig:
     
     # Common options
     args: Optional[List[str]] = None
-    env: Optional[dict] = None
-    
-    def __post_init__(self):
+    env: Optional[Dict[str, Any]] = None
+
+    def __post_init__(self) -> None:
         """Validate configuration based on server type"""
         if self.type == SERVER_TYPE_PYTHON and not self.script:
             raise ValueError(f"Python server '{self.name}' requires 'script' path")
@@ -73,9 +73,9 @@ class MCPServerConfig:
         if self.type == SERVER_TYPE_EXECUTABLE and not self.command:
             raise ValueError(f"Executable server '{self.name}' requires 'command'")
     
-    def to_dict(self) -> dict:
+    def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization"""
-        data = {
+        data: Dict[str, Any] = {
             "name": self.name,
             "type": self.type,
             "enabled": self.enabled,
@@ -98,7 +98,7 @@ class MCPServerConfig:
         return data
     
     @classmethod
-    def from_dict(cls, data: dict) -> 'MCPServerConfig':
+    def from_dict(cls, data: Dict[str, Any]) -> 'MCPServerConfig':
         """Create from dictionary, handling legacy format"""
         # Handle legacy format (no 'type' field, only 'script')
         if 'type' not in data and 'script' in data:
@@ -139,7 +139,7 @@ class MCPConfiguration:
         """Create default configuration with zero MCP servers."""
         return cls(version="2.0", servers=[])
     
-    def save(self, path: Path):
+    def save(self, path: Path) -> None:
         """Save configuration to JSON file"""
         data = {
             "version": self.version,

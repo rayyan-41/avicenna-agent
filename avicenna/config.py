@@ -1,5 +1,7 @@
 import os
 from pathlib import Path
+from typing import Any, cast
+
 from dotenv import load_dotenv
 from rich.console import Console
 from avicenna.mcp.mcp_config_schema import MCPConfiguration
@@ -69,22 +71,25 @@ class Config:
             return MCPConfiguration.default()
     
     @classmethod
-    def load_user_config(cls) -> dict:
+    def load_user_config(cls) -> dict[str, Any]:
         """Load user configuration (email, preferences, etc.)"""
         import json
-        
+
         if not cls.USER_CONFIG_PATH.exists():
             return {}
-        
+
         try:
             with open(cls.USER_CONFIG_PATH, 'r') as f:
-                return json.load(f)
+                # json.load is typed Any; the file is written by save_user_config
+                # and is always a JSON object. cast rather than re-validate so
+                # behaviour is unchanged.
+                return cast(dict[str, Any], json.load(f))
         except Exception as e:
             console.print(f"[yellow]⚠️ Error loading user config:[/yellow] {e}")
             return {}
     
     @classmethod
-    def save_user_config(cls, config: dict):
+    def save_user_config(cls, config: dict[str, Any]) -> None:
         """Save user configuration"""
         import json
         
@@ -110,10 +115,10 @@ class Config:
         
         # Priority 2: User config (saved from previous session)
         user_config = cls.load_user_config()
-        return user_config.get('google_user_email')
-    
+        return cast("str | None", user_config.get('google_user_email'))
+
     @classmethod
-    def set_google_user_email(cls, email: str):
+    def set_google_user_email(cls, email: str) -> None:
         """Save Google user email to user config"""
         user_config = cls.load_user_config()
         user_config['google_user_email'] = email

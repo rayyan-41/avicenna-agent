@@ -59,6 +59,15 @@ class ToolRegistry:
         self._tools[alias] = loser
         return alias if loser is tool else tool.name
 
+    def has(self, name: str) -> bool:
+        """Is this tool available?
+
+        A vault may legitimately ship zero PowerShell tools (see `avicenna init`).
+        Pipeline stages use this to degrade to a Python fallback instead of
+        aborting, so a tool-less vault can still produce a complete note.
+        """
+        return name in self._tools
+
     def get(self, name: str) -> Tool:
         try:
             return self._tools[name]

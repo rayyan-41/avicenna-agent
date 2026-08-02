@@ -23,6 +23,10 @@ app.add_typer(config_app, name="config")
 mcp_app = typer.Typer()
 app.add_typer(mcp_app, name="mcp")
 
+from avicenna.cli.mcp_cmd import mcp_test  # noqa: E402  (registered below)
+
+mcp_app.command("test")(mcp_test)
+
 
 # ---------------------------------------------------------------------------
 # Callback: no subcommand => launch TUI
@@ -48,13 +52,37 @@ def main_callback(
 
 @app.command("init")
 def init_cmd(
-    vault: Optional[Path] = typer.Argument(None, help="Path to scaffold the vault"),
+    vault_arg: Optional[Path] = typer.Argument(None, metavar="[VAULT]",
+                                               help="Path to scaffold the vault"),
+    vault_opt: Optional[Path] = typer.Option(None, "--vault",
+                                             help="Same as the positional argument"),
 ) -> None:
     """Scaffold a minimal working vault."""
     from avicenna.vault.init_scaffold import init_vault
-    path = vault or Path.cwd() / "avicenna-vault"
+    path = vault_arg or vault_opt or Path.cwd() / "avicenna-vault"
     result = init_vault(path)
     typer.echo(f"Vault scaffolded at {result}")
+
+
+@app.command("route")
+def route_cmd(
+    topic: str = typer.Argument(..., help="Topic to classify"),
+    vault: Optional[Path] = typer.Option(None, "--vault"),
+) -> None:
+    """Show which agent a topic routes to, and why."""
+    from avicenna.vault.discovery import discover_vault
+    from avicenna.vault.routing import route_request, score_domains
+    from avicenna.vault.vault import Vault
+
+    bound = Vault.load(discover_vault(explicit=vault))
+    chosen = route_request(bound, topic)
+
+    typer.echo(f"topic: {topic}")
+    typer.echo(f"routed to: {chosen.name if chosen else '(ambiguous - escalates to user)'}")
+    typer.echo("")
+    typer.echo(f"  {'agent':14s} {'score':>5s}  matched terms")
+    for s_ in score_domains(bound, topic):
+        typer.echo(f"  {s_}")
 
 
 @app.command("note")
@@ -76,16 +104,22 @@ def note_cmd(
 
     vault_path = discover_vault(explicit=vault)
     bound_vault = Vault.load(vault_path)
-    if not dry_run:
-        key = read_api_key()
-        if not key:
-            typer.echo("No API key found. Set MISTRAL_API_KEY in .env or run avicenna to configure.", err=True)
-            raise typer.Exit(1)
-        provider = get_provider("mistral", api_key=key, model=Config.MISTRAL_MODEL)
+
+    # Dry run still calls the model: it performs routing AND pre-flight, which
+    # is the whole point (it exercises the riskiest parser for one completion).
+    key = read_api_key()
+    if not key:
+        typer.echo(
+            "No API key found. Set MISTRAL_API_KEY in .env, or run `avicenna` to configure.",
+            err=True,
+        )
+        raise typer.Exit(1)
+    provider = get_provider("mistral", api_key=key, model=Config.MISTRAL_MODEL)
 
     asyncio.run(execute_run(
         topic, provider, bound_vault,
         dry_run=dry_run, concurrency=concurrency,
+        resume=resume, fresh=not resume,
     ))
     typer.echo("Done.")
 

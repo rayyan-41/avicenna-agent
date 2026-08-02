@@ -29,3 +29,9 @@ include = ["avicenna*"]
 
 [tool.setuptools.package-data]
 avicenna = ["tui/*.tcss"]
+
+[tool.pytest.ini_options]
+# pytest-asyncio 1.x needs this or bare `async def test_` silently never runs.
+# Three tests in test_providers.py were failing for exactly this reason.
+asyncio_mode = "auto"
+testpaths = ["tests"]

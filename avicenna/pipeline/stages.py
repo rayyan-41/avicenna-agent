@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
+import re
+from pathlib import Path
+
 from avicenna.events import (
     LinkCandidatesFound, LogMessage, ManifestWritten, MocUpdated,
     NoteWritten, PreflightDeclared, Stage, RunComplete, TagsProposed,
@@ -16,6 +21,55 @@ from avicenna.pipeline.stage import PipelineAbort, PipelineStage
 from avicenna.pipeline.sections import generate_sections
 from avicenna.pipeline.toolcall import invoke_tool
 from avicenna.vault.routing import route_request, validate_domain
+
+
+# --- graceful degradation ---------------------------------------------------
+# A vault may legitimately have zero PowerShell tools (`avicenna init` produces
+# one). Every tool call below is optional: when the tool is absent the stage
+# falls back to a Python equivalent or skips, and always says so, so a user
+# never silently receives a lesser note.
+
+async def _skip(ctx: RunContext, tool: str, what: str) -> None:
+    await ctx.emit(
+        LogMessage, level="warning",
+        text=f"{tool} not available in this vault; {what}",
+    )
+
+
+def _safe_filename(title: str) -> str:
+    cleaned = re.sub(r'[<>:"/\\|?*]', "", title).strip().rstrip(".")
+    return (cleaned or "Untitled")[:120] + ".md"
+
+
+def _note_destination(ctx: RunContext) -> Path:
+    """Where the finished note belongs in the vault.
+
+    Domain folders are Title Case at the vault root (Art/, History/, ...).
+    Created if absent so a scaffolded vault works on its first run.
+    """
+    domain = (ctx.domain or "general").replace("-", " ").title().replace(" ", " ")
+    folder = ctx.spec.vault.root / domain
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder / _safe_filename(ctx.spec.topic)
+
+
+def _write_note_atomically(dest: Path, text: str) -> None:
+    """Write via a sibling temp file plus os.replace.
+
+    Obsidian indexes on write, so a partially written note would appear in
+    search, in graph view, and in any git plugin's next commit.
+    """
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    tmp.write_text(text, encoding="utf-8", newline="\n")
+    os.replace(tmp, dest)
+
+
+async def _invoke_optional(ctx: RunContext, tool: str, **kwargs):
+    """invoke_tool, but returns None (with a warning) when the tool is absent."""
+    if not ctx.spec.vault.tools.has(tool):
+        await _skip(ctx, tool, "skipping this check")
+        return None
+    return await invoke_tool(ctx, tool, **kwargs)
 
 
 class RoutingStage(PipelineStage):
@@ -87,12 +141,17 @@ class ManifestStage(PipelineStage):
 
     async def run(self, ctx: RunContext) -> None:
         assert ctx.slug is not None
-        result = await invoke_tool(ctx, "write_manifest",
-            Slug=ctx.slug, Headings=",".join(ctx.headings))
-        if result.parsed is None or result.parsed.token != "MANIFEST_WRITTEN":
-            raise PipelineAbort("manifest",
-                f"write_manifest failed: {result.parsed.token if result.parsed else result.stderr}")
-        expected = int(result.parsed.captures.get("chunks", len(ctx.headings)))
+        expected = len(ctx.headings)
+        if ctx.spec.vault.tools.has("write_manifest"):
+            result = await invoke_tool(ctx, "write_manifest",
+                Slug=ctx.slug, Headings=",".join(ctx.headings))
+            if result.parsed is None or result.parsed.token != "MANIFEST_WRITTEN":
+                raise PipelineAbort("manifest",
+                    f"write_manifest failed: {result.parsed.token if result.parsed else result.stderr}")
+            expected = int(result.parsed.captures.get("chunks", expected))
+        else:
+            # The manifest is telemetry plus resume state, not a gate.
+            await _skip(ctx, "write_manifest", "continuing without a manifest (--resume unavailable)")
         await ctx.emit(ManifestWritten, slug=ctx.slug, expected_count=expected)
         # Record preflight complete
         try:
@@ -120,40 +179,69 @@ class AssemblyStage(PipelineStage):
 
     async def run(self, ctx: RunContext) -> None:
         assert ctx.slug is not None
-        result = await invoke_tool(ctx, "verify_chunks",
-            Slug=ctx.slug, ExpectedCount=len(ctx.headings), Mode="verify")
-        token = result.parsed.token if result.parsed else ""
-        if token != "ALL_PRESENT":
-            missing = result.parsed.captures.get("missing", "?") if result.parsed else "?"
-            raise PipelineAbort("assembly",
-                f"missing chunks: {missing}/{len(ctx.headings)}; use --resume to regenerate")
-        # Read chunks and delegate to weaver
-        read_result = await invoke_tool(ctx, "verify_chunks",
-            Slug=ctx.slug, ExpectedCount=len(ctx.headings), Mode="read")
+        expected = list(range(1, len(ctx.headings) + 1))
+
+        # --- gate: every chunk must exist before anything is assembled -------
+        if ctx.spec.vault.tools.has("verify_chunks"):
+            result = await invoke_tool(ctx, "verify_chunks",
+                Slug=ctx.slug, ExpectedCount=len(ctx.headings), Mode="verify")
+            token = result.parsed.token if result.parsed else ""
+            if token != "ALL_PRESENT":
+                missing = result.parsed.captures.get("missing", "?") if result.parsed else "?"
+                raise PipelineAbort("assembly",
+                    f"missing chunks: {missing}/{len(ctx.headings)}; use --resume to regenerate")
+            chunk_text = (await invoke_tool(ctx, "verify_chunks",
+                Slug=ctx.slug, ExpectedCount=len(ctx.headings), Mode="read")).stdout or ""
+        else:
+            await _skip(ctx, "verify_chunks", "verifying and reading chunks in Python instead")
+            missing = [i for i in expected if not ctx.chunk_path(i).is_file()]
+            if missing:
+                raise PipelineAbort("assembly",
+                    f"missing chunks: {missing}; use --resume to regenerate")
+            parts: list[str] = []
+            for i in expected:
+                body = ctx.chunk_path(i).read_text(encoding="utf-8", errors="replace")
+                parts.append(f"<!-- CHUNK {i:02d} START -->\n{body}\n<!-- CHUNK {i:02d} END -->")
+            chunk_text = "\n\n".join(parts)
+
+        # --- assemble --------------------------------------------------------
+        note_text = chunk_text
         if "weaver" in ctx.spec.vault.agents:
             weaver_prompt = (
                 f"Topic: {ctx.spec.topic}\n"
                 f"Slug: {ctx.slug}\n"
                 f"Headings: {', '.join(ctx.headings)}\n"
-                f"Target path: insert into vault under the correct domain folder\n"
+                "Assemble these chunks into one note: add transitions between "
+                "sections, apply the canonical frontmatter with tags: [PLACEHOLDER], "
+                "and separate sections with '- - -'. Return only the note.\n"
             )
-            import asyncio
             try:
-                note_text = await asyncio.wait_for(
-                    delegate(ctx, "weaver", read_result.stdout + "\n\n" + weaver_prompt),
+                woven = await asyncio.wait_for(
+                    delegate(ctx, "weaver", chunk_text + "\n\n" + weaver_prompt),
                     timeout=300.0,
                 )
-            except Exception:
-                note_text = read_result.stdout or ""
-        else:
-            note_text = read_result.stdout or ""
-        # Weaver or read output gives us the assembled note
-        ctx.note_path = ctx.tmp_dir / f"{ctx.slug}_assembled.md"
-        ctx.note_path.write_text(note_text, encoding="utf-8", newline="\n")
-        await ctx.emit(NoteWritten, path=str(ctx.note_path), words=len(note_text.split()))
-        # Cleanup only after the note is confirmed on disk
-        if ctx.note_path.exists():
-            await invoke_tool(ctx, "cleanup_chunks", Slug=ctx.slug)
+                if woven and woven.strip():
+                    note_text = woven
+            except Exception as exc:  # noqa: BLE001 - fall back to raw chunks
+                await ctx.emit(LogMessage, level="warning",
+                               text=f"weaver failed ({exc}); using raw chunk text")
+
+        # --- place it in the vault, not in _tmp ------------------------------
+        dest = _note_destination(ctx)
+        _write_note_atomically(dest, note_text)
+        ctx.note_path = dest
+        ctx.total_words = len(note_text.split())
+        await ctx.emit(NoteWritten, path=str(dest), words=ctx.total_words)
+
+        # --- cleanup only once the note is confirmed on disk -----------------
+        if dest.is_file():
+            if ctx.spec.vault.tools.has("cleanup_chunks"):
+                await invoke_tool(ctx, "cleanup_chunks", Slug=ctx.slug)
+            else:
+                for i in expected:
+                    ctx.chunk_path(i).unlink(missing_ok=True)
+                for sidecar in ("_manifest.json", "_pipeline_state.json"):
+                    (ctx.tmp_dir / f"{ctx.slug}{sidecar}").unlink(missing_ok=True)
 
 
 class WordCountStage(PipelineStage):
@@ -162,18 +250,27 @@ class WordCountStage(PipelineStage):
     async def run(self, ctx: RunContext) -> None:
         assert ctx.note_path is not None
         mini = TEMPLATE_MINIMUMS.get(ctx.template or "general", 1000)
-        result = await invoke_tool(ctx, "validate_wordcount",
-            FilePath=str(ctx.note_path), MinWords=mini, Template=ctx.template or "general")
-        token = result.parsed.token if result.parsed else ""
-        actual = int(result.parsed.captures.get("short", 0)) if result.parsed else 0
-        if token == "WORDCOUNT_FAIL":
-            ctx.total_words = mini - actual if actual else mini
-            await ctx.emit(WordCountChecked, actual=ctx.total_words, minimum=mini, verdict="fail")
-            await ctx.emit(LogMessage, level="warning",
-                          text=f"word count {ctx.total_words} below minimum {mini}")
+
+        if ctx.spec.vault.tools.has("validate_wordcount"):
+            result = await invoke_tool(ctx, "validate_wordcount",
+                FilePath=str(ctx.note_path), MinWords=mini,
+                Template=ctx.template or "general")
+            token = result.parsed.token if result.parsed else ""
+            deficit = int(result.parsed.captures.get("short", 0)) if result.parsed else 0
+            actual = ctx.total_words if token != "WORDCOUNT_FAIL" else max(mini - deficit, 0)
         else:
-            ctx.total_words = max(ctx.total_words, mini)
-            await ctx.emit(WordCountChecked, actual=ctx.total_words, minimum=mini, verdict="pass")
+            await _skip(ctx, "validate_wordcount", "counting words in Python instead")
+            body = ctx.note_path.read_text(encoding="utf-8", errors="replace")
+            actual = len(body.split())
+            token = "WORDCOUNT_PASS" if actual >= mini else "WORDCOUNT_FAIL"
+
+        ctx.total_words = actual
+        verdict = "fail" if token == "WORDCOUNT_FAIL" else "pass"
+        await ctx.emit(WordCountChecked, actual=actual, minimum=mini, verdict=verdict)
+        if verdict == "fail":
+            # Never blocking: the note stays on disk marked incomplete.
+            await ctx.emit(LogMessage, level="warning",
+                           text=f"word count {actual} below minimum {mini}")
 
 
 class TocStage(PipelineStage):
@@ -181,6 +278,9 @@ class TocStage(PipelineStage):
 
     async def run(self, ctx: RunContext) -> None:
         assert ctx.note_path is not None
+        if not ctx.spec.vault.tools.has("generate_toc"):
+            await _skip(ctx, "generate_toc", "note will have no table of contents")
+            return
         await invoke_tool(ctx, "generate_toc", FilePath=str(ctx.note_path), MinHeadings=2)
 
 
@@ -219,7 +319,16 @@ class TaggingStage(PipelineStage):
                 await ctx.emit(LogMessage, level="warning", text="tagger produced no identifiable tag line")
                 break
             await ctx.emit(TagsProposed, tags=tuple(tag_line.split(",")))
-            result = await invoke_tool(ctx, "validate_tags", TagLine=tag_line)
+            result = await _invoke_optional(ctx, "validate_tags", TagLine=tag_line)
+            if result is None:
+                # No validator in this vault: trust the tagger rather than
+                # burning three attempts failing against a tool that is absent.
+                ctx.tags = [t.strip() for t in tag_line.split(",") if t.strip()]
+                ctx.handoffs["tagger"] = tagger_output
+                await ctx.emit(TagsValidated, verdict="pass",
+                               message="accepted unvalidated (validate_tags absent)",
+                               accepted=tuple(ctx.tags))
+                break
             token = result.parsed.token if result.parsed else ""
             if token == "PASS":
                 ctx.tags = [t.strip() for t in tag_line.split(",") if t.strip()]
@@ -227,7 +336,9 @@ class TaggingStage(PipelineStage):
                 await ctx.emit(TagsValidated, verdict="pass", accepted=tuple(ctx.tags))
                 break
             else:
-                ctx.handoffs["tagger_errors"] = str(result.parsed.captures.get("reasons", token)) if result.parsed else token
+                ctx.handoffs["tagger_errors"] = (
+                    str(result.parsed.captures.get("reasons", token)) if result.parsed else token
+                )
                 await ctx.emit(TagsValidated, verdict="fail", message=ctx.handoffs["tagger_errors"])
         if not ctx.tags:
             await ctx.emit(LogMessage, level="error", text="TAGGER_UNRESOLVED after 3 attempts")
@@ -261,10 +372,14 @@ class LinkingStage(PipelineStage):
         handoff = ctx.handoffs.get("formatter", ctx.handoffs.get("tagger", ""))
         # Get related notes
         try:
-            result = await invoke_tool(ctx, "get_related_notes",
+            result = await _invoke_optional(ctx, "get_related_notes",
                 NotePath=str(ctx.note_path), CoreTags=",".join(ctx.tags) if ctx.tags else "",
                 SupportingTags="", ExcludedMentions="", TopN=5, MinScore=0.5)
-            count = int(result.parsed.captures.get("count", 0)) if result.parsed and result.parsed.ok else 0
+            count = (
+                int(result.parsed.captures.get("count", 0))
+                if result is not None and result.parsed and result.parsed.ok
+                else 0
+            )
             await ctx.emit(LinkCandidatesFound, count=count, sample=())
             payload = f"Note path: {ctx.note_path}\n{handoff}\nRelated count: {count}"
             await delegate(ctx, "linker", payload)
@@ -280,12 +395,12 @@ class MocStage(PipelineStage):
 
     async def run(self, ctx: RunContext) -> None:
         assert ctx.domain is not None
-        result = await invoke_tool(ctx, "update_moc",
+        result = await _invoke_optional(ctx, "update_moc",
             Domain=ctx.domain,
             NoteTitle=ctx.spec.topic,
             NoteFilename=ctx.note_path.name if ctx.note_path else "",
         )
-        token = result.parsed.token if result.parsed else ""
+        token = result.parsed.token if result is not None and result.parsed else "SKIPPED"
         await ctx.emit(MocUpdated, result=token, path=str(ctx.note_path or ""))
 
 

@@ -138,6 +138,46 @@ avicenna mcp test <name>
 avicenna mcp tools
 ```
 
+`avicenna mcp test` starts each server on its own, initializes a session,
+counts the tools it contributes, and shuts it down again. With no argument it
+tests every **enabled** server; pass a name to test just one. It exits `1` if
+any tested server failed, `0` otherwise — so it works in a script. Use
+`--timeout <seconds>` (default 30) for a slow first `npx` install.
+
+A server that connects:
+
+```text
+$ avicenna mcp test filesystem
+MCP server test
+┌────────────┬──────┬───────────┬───────┐
+│ Server     │ Type │ Status    │ Tools │
+├────────────┼──────┼───────────┼───────┤
+│ filesystem │ node │ connected │    12 │
+└────────────┴──────┴───────────┴───────┘
+
+1 of 1 servers connected, 12 tools total.
+```
+
+A server that does not — the real error is printed under the table:
+
+```text
+$ avicenna mcp test some-uvx-server
+MCP server test
+┌─────────────────┬────────────┬────────┬───────┐
+│ Server          │ Type       │ Status │ Tools │
+├─────────────────┼────────────┼────────┼───────┤
+│ some-uvx-server │ executable │ failed │     - │
+└─────────────────┴────────────┴────────┴───────┘
+
+some-uvx-server failed:
+  Executable not found: uvx
+
+0 of 1 servers connected, 0 tools total.
+```
+
+With no servers configured, `mcp test` reports that and exits `0` — zero
+servers is a working state, so it points you at the config instead of failing.
+
 ## Security
 
 **An MCP server is arbitrary code with tool access.** By default MCP tools

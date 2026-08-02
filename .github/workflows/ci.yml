@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [master, harness]
+  pull_request:
+    branches: [master, harness]
+
+jobs:
+  build:
+    # Windows is the real target: the vault tools shell out to PowerShell.
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package and dev dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Tests
+        run: pytest -q
+
+      # TODO: drop continue-on-error once the current typing cleanup lands, at
+      # which point a --strict regression should block the merge.
+      - name: Type check (strict)
+        continue-on-error: true
+        run: mypy --strict avicenna/providers avicenna/pipeline
+
+      # A blocking call inside a Textual message handler freezes the whole UI —
+      # the single biggest cause of the TUI feeling unresponsive. Anything under
+      # avicenna/tui must use the async equivalent (asyncio.sleep,
+      # asyncio.create_subprocess_exec, run_worker/run_in_executor, an async
+      # HTTP client). Comments are stripped before matching, and the patterns
+      # are anchored to the module name so asyncio.sleep is never flagged.
+      - name: Lint TUI for blocking calls
+        shell: pwsh
+        run: |
+          $root = "avicenna/tui"
+          if (-not (Test-Path -LiteralPath $root)) {
+            Write-Host "No $root directory - nothing to lint."
+            exit 0
+          }
+
+          $pattern = '\b(subprocess\.run|time\.sleep|requests\.)'
+          $violations = @()
+
+          Get-ChildItem -LiteralPath $root -Recurse -File -Filter *.py | ForEach-Object {
+            $file = $_.FullName
+            $lineNumber = 0
+            foreach ($line in (Get-Content -LiteralPath $file)) {
+              $lineNumber++
+              # Drop trailing comments so a mention in prose is not a violation.
+              $code = $line -replace '#.*$', ''
+              if ([string]::IsNullOrWhiteSpace($code)) { continue }
+              $match = $code | Select-String -Pattern $pattern
+              if ($null -ne $match) {
+                $violations += ("{0}:{1}: {2}" -f $file, $lineNumber, $line.Trim())
+              }
+            }
+          }
+
+          if ($violations.Count -gt 0) {
+            Write-Host "::error::Blocking call(s) found under $root - use the async equivalent."
+            $violations | ForEach-Object { Write-Host "  $_" }
+            exit 1
+          }
+
+          Write-Host "No blocking calls found under $root."
+          exit 0
+
+      # TODO: drop continue-on-error once the vendor-neutrality fix lands.
+      # Importing avicenna.providers must not drag a specific vendor SDK into
+      # sys.modules; provider imports belong behind the registry, at the edge.
+      - name: Vendor leak check
+        continue-on-error: true
+        run: python -c "import sys; import avicenna.providers; sys.exit(1 if 'mistralai' in sys.modules else 0)"

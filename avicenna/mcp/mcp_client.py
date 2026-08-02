@@ -11,7 +11,7 @@ import shutil
 import sys
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, cast
 from contextlib import AsyncExitStack
 
 from mcp import ClientSession, StdioServerParameters
@@ -24,6 +24,9 @@ from avicenna.mcp.mcp_config_schema import (
     SERVER_TYPE_NODE,
     SERVER_TYPE_EXECUTABLE
 )
+
+if TYPE_CHECKING:
+    from avicenna.providers.base import ToolSpec
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +41,7 @@ class MCPClientManager:
     - Executable: Direct command execution
     """
     
-    def __init__(self):
+    def __init__(self) -> None:
         self.sessions: Dict[str, ClientSession] = {}
         self.exit_stack = AsyncExitStack()
         self.tools: Dict[str, MCPTool] = {}  # tool_name -> MCPTool
@@ -59,7 +62,9 @@ class MCPClientManager:
         
         if server_type == SERVER_TYPE_PYTHON:
             # Python script
-            script_path = Path(server_config.script)
+            # MCPServerConfig.__post_init__ guarantees `script` is set for
+            # python-type servers, which mypy cannot see through.
+            script_path = Path(cast(str, server_config.script))
             if not script_path.is_absolute():
                 # Make relative to project root
                 project_root = Path(__file__).parent.parent
@@ -219,7 +224,12 @@ class MCPClientManager:
         
         return results
     
-    async def call_tool(self, tool_name: str, arguments: dict, user_email_provider=None) -> str:
+    async def call_tool(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        user_email_provider: Optional[Callable[[], Optional[str]]] = None,
+    ) -> str:
         """
         Call a tool via its MCP server
         
@@ -279,14 +289,14 @@ class MCPClientManager:
         
         return str(result) if result else "Tool execution completed with no output."
     
-    def tool_specs(self):
+    def tool_specs(self) -> "List[ToolSpec]":
         """Return neutral ToolSpec objects from discovered MCP tools.
 
         This is the vendor-neutral export path; each provider converts at its edge.
         """
         from avicenna.providers.base import ToolSpec
 
-        specs = []
+        specs: List[ToolSpec] = []
         for tool_name, mcp_tool in self.tools.items():
             specs.append(ToolSpec(
                 name=mcp_tool.name,
@@ -295,12 +305,13 @@ class MCPClientManager:
             ))
         return specs
 
-    def get_gemini_tools(self) -> List:
+    def get_gemini_tools(self) -> List[Any]:
         """
         Convert MCP tools to Gemini Tool format.
 
         Returns:
-            List of Gemini Tool objects
+            List of google.genai Tool objects. Typed as List[Any] because
+            google-genai is an optional extra and is imported lazily below.
         """
         from google.genai import types as genai_types
 
@@ -320,7 +331,7 @@ class MCPClientManager:
 
         return []
     
-    def _convert_schema(self, json_schema: dict) -> dict:
+    def _convert_schema(self, json_schema: Dict[str, Any]) -> Dict[str, Any]:
         """
         Convert JSON Schema to Gemini-compatible parameter format
         
@@ -335,7 +346,7 @@ class MCPClientManager:
         if not json_schema:
             return {"type": "object", "properties": {}}
         
-        def convert_property(prop_schema: dict) -> dict:
+        def convert_property(prop_schema: Dict[str, Any]) -> Dict[str, Any]:
             """Recursively convert a property schema to Gemini format"""
             
             # Handle anyOf with const values -> convert to enum
@@ -450,7 +461,7 @@ class MCPClientManager:
         """Get list of all available tool names"""
         return list(self.tools.keys())
     
-    async def cleanup(self):
+    async def cleanup(self) -> None:
         """Clean up all server connections"""
         logger.info("Closing MCP server connections...")
         await self.exit_stack.aclose()

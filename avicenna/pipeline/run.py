@@ -26,13 +26,14 @@ async def execute_run(
     domain_override: str | None = None,
     template_override: str | None = None,
     fresh: bool = True,
+    resume: bool = False,
 ) -> None:
     rid = run_id or str(uuid.uuid4())[:8]
     bus = bus or EventBus()
     spec = RunSpec(
         topic=topic, vault=vault, provider=provider, bus=bus,
         run_id=rid, concurrency=concurrency, dry_run=dry_run,
-        fresh=fresh, domain_override=domain_override,
+        fresh=fresh, resume=resume, domain_override=domain_override,
         template_override=template_override,
     )
     ctx = RunContext(spec=spec)
@@ -49,25 +50,25 @@ async def execute_run(
         runner = PipelineRunner(dry_stages)
         ok = await runner.run(ctx)
         if ok:
-            await bus.emit(
-                RunComplete, summary=f"dry-run: {ctx.slug}", elapsed=time.time() - ctx.started_at,
+            await bus.emit(RunComplete(
+                run_id=rid, summary=f"dry-run: {ctx.slug}",
+                elapsed=time.time() - ctx.started_at,
                 total_words=ctx.target_words,
-            )
+            ))
         return
 
     try:
         runner = PipelineRunner(stages)
         ok = await runner.run(ctx)
     except asyncio.CancelledError:
-        await bus.emit(RunFailed(error="cancelled by user"))
+        # _tmp is deliberately left intact so --resume can pick the run back up.
+        await bus.emit(RunFailed(run_id=rid, error="cancelled by user"))
         raise
-    finally:
-        pass  # _tmp is left intact
 
     if ok:
-        await bus.emit(
-            RunComplete,
+        await bus.emit(RunComplete(
+            run_id=rid,
             summary=f"note written to {ctx.note_path}",
             elapsed=time.time() - ctx.started_at,
             total_words=ctx.total_words,
-        )
+        ))
