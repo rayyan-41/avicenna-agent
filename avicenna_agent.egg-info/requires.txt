@@ -1,4 +1,15 @@
-google-genai>=0.3.0
 python-dotenv>=1.0.0
 typer>=0.9.0
 rich>=13.0.0
+mistralai>=1.0.0
+textual<1.0,>=0.79
+mcp>=1.0.0
+pyyaml>=6.0
+
+[dev]
+pytest
+pytest-asyncio
+mypy
+
+[gemini]
+google-genai>=0.3.0
