@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TextIO
 
 from avicenna.events import Event
+from avicenna.secrets import redact
 
 
 class JsonlSink:
@@ -24,7 +25,8 @@ class JsonlSink:
     def write_event(self, event: Event) -> None:
         record: dict = {"type": type(event).__name__}
         record.update(dataclasses.asdict(event))
-        self._f.write(json.dumps(record, default=str) + "\n")
+        raw = json.dumps(record, default=str)
+        self._f.write(redact(raw) + "\n")
         self._f.flush()
 
     def close(self) -> None:
