@@ -31,6 +31,22 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _tool_schema(tool: object) -> dict:
+    """Read an MCP tool's JSON Schema across SDK major versions.
+
+    mcp 1.x exposed `Tool.inputSchema`. mcp 2.x renamed the attribute to
+    `input_schema` and kept `inputSchema` only as a pydantic serialisation
+    alias, which is NOT an attribute. The previous
+    `getattr(t, "inputSchema", {})` therefore silently returned {} for every
+    tool under 2.x, handing the model tools with empty parameter schemas.
+    """
+    for attr in ("input_schema", "inputSchema"):
+        schema = getattr(tool, attr, None)
+        if isinstance(schema, dict):
+            return schema
+    return {"type": "object", "properties": {}}
+
+
 class MCPClientManager:
     """
     Manages connections to multiple MCP servers.
@@ -253,8 +269,8 @@ class MCPClientManager:
         # Auto-inject user_google_email for workspace-mcp tools if needed
         if server_name == "google-workspace":
             tool = self.tools.get(tool_name)
-            if tool and hasattr(tool, 'inputSchema'):
-                schema = tool.inputSchema
+            if tool is not None:
+                schema = _tool_schema(tool)
                 # Check if tool requires user_google_email and it's not provided
                 if (isinstance(schema, dict) and 
                     'required' in schema and 
@@ -301,7 +317,7 @@ class MCPClientManager:
             specs.append(ToolSpec(
                 name=mcp_tool.name,
                 description=mcp_tool.description or "",
-                parameters=mcp_tool.inputSchema if hasattr(mcp_tool, 'inputSchema') else {},
+                parameters=_tool_schema(mcp_tool),
             ))
         return specs
 
@@ -321,7 +337,7 @@ class MCPClientManager:
             function_decl = genai_types.FunctionDeclaration(
                 name=mcp_tool.name,
                 description=mcp_tool.description or f"Tool: {mcp_tool.name}",
-                parameters=self._convert_schema(mcp_tool.inputSchema)
+                parameters=self._convert_schema(_tool_schema(mcp_tool))
             )
 
             function_declarations.append(function_decl)
