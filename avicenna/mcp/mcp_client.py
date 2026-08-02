@@ -20,7 +20,7 @@ from mcp.types import Tool as MCPTool
 
 from google.genai import types as genai_types
 
-from mcp_servers.mcp_config_schema import (
+from avicenna.mcp.mcp_config_schema import (
     MCPServerConfig,
     SERVER_TYPE_PYTHON,
     SERVER_TYPE_NODE,
