@@ -12,14 +12,34 @@ GLYPH: dict[str, str] = {"pending": "○", "running": "◐", "done": "●", "fai
 
 
 class VaultCard(Static):
-    """Shows vault name, path, provider and model."""
+    """Vault name, path, provider/model, and where the user is standing."""
 
-    def set_info(self, vault_name: str, vault_path: str, provider: str, model: str) -> None:
-        self.update(
-            f"[bold]Vault:[/bold] {vault_name}\n"
-            f"[dim]{vault_path}[/dim]\n"
-            f"[dim]{provider} / {model}[/dim]"
-        )
+    _BADGE_STYLE = {
+        "IN VAULT": "black on green",
+        "EXTERNAL": "black on yellow",
+        "NO VAULT": "white on red",
+    }
+
+    def set_info(
+        self,
+        vault_name: str,
+        vault_path: str,
+        provider: str,
+        model: str,
+        badge: str = "",
+        where: str = "",
+    ) -> None:
+        lines = []
+        if badge:
+            style = self._BADGE_STYLE.get(badge, "dim")
+            lines.append(f"[{style}] {badge} [/] [bold]{vault_name}[/bold]")
+        else:
+            lines.append(f"[bold]Vault:[/bold] {vault_name}")
+        lines.append(f"[dim]{vault_path}[/dim]")
+        if where and where != ".":
+            lines.append(f"[dim]cwd: {where}[/dim]")
+        lines.append(f"[dim]{provider} / {model}[/dim]")
+        self.update("\n".join(lines))
 
 
 class PreflightCard(Static):

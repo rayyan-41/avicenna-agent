@@ -39,11 +39,13 @@ class AvicennaApp(App[None]):
         vault: Any = None,
         bus: EventBus | None = None,
         provider: Any = None,
+        context: Any = None,
     ) -> None:
         super().__init__()
         self._vault = vault
         self._bus = bus or EventBus()
         self._provider = provider
+        self._vault_context = context
         self._run_worker: Worker[None] | None = None
         self._table: dict[type[ev.Event], Callable[[ev.Event], None]] = build_table(self)
 
@@ -57,19 +59,97 @@ class AvicennaApp(App[None]):
 
     def on_mount(self) -> None:
         self.run_worker(pump_bus(self._bus, self), name="bus-pump", exclusive=False)
-        self.set_focus(self.query_one("#chat-input", Input))
-        # Welcome message
-        chat = self.query_one(ChatPanel)
-        chat.append_assistant("Avicenna ready. Type a topic to generate a note, or /help for commands.")
-        # Seed vault card
-        if self._vault:
-            meta = self.query_one(MetadataPanel)
-            provider_name = getattr(self._provider, "name", "none") if self._provider else "none"
-            model_name = getattr(self._provider, "_model", "") if self._provider else ""
-            meta.vault_card.set_info(
-                self._vault.root.name, str(self._vault.root),
-                provider_name, model_name,
+        self._refresh_vault_card()
+
+        if self._provider is None:
+            # First run, or no usable key: onboard before anything else.
+            #
+            # Deferred with call_after_refresh rather than pushed inline:
+            # push_screen during on_mount runs before the initial refresh has
+            # completed, and Textual deadlocks waiting for a screen that is
+            # being mounted from inside mount. This hung the app on first run.
+            self.call_after_refresh(self._begin_onboarding)
+            return
+
+        self._announce_ready()
+
+    # -- onboarding ---------------------------------------------------------
+
+    def _begin_onboarding(self) -> None:
+        from avicenna.tui.screens.onboarding import (
+            DEFAULT_MODEL,
+            DEFAULT_PROVIDER,
+            ProviderSelectScreen,
+        )
+
+        def finished(key: str | None) -> None:
+            if not key:
+                return
+            from avicenna.config import Config
+            from avicenna.providers.registry import get_provider
+            from avicenna.secrets import write_api_key
+
+            store = write_api_key(DEFAULT_PROVIDER, key)
+            cfg = Config.load_user_config()
+            cfg.update(
+                onboarded=True, provider=DEFAULT_PROVIDER,
+                model=DEFAULT_MODEL, key_store=store,
             )
+            # Remember this vault so `avicenna` works from anywhere next time.
+            if self._vault is not None:
+                cfg["default_vault"] = str(self._vault.root)
+            Config.save_user_config(cfg)
+
+            self._provider = get_provider(
+                DEFAULT_PROVIDER, api_key=key, model=DEFAULT_MODEL
+            )
+            chat = self.query_one(ChatPanel)
+            chat.append_assistant(
+                f"Key saved to your {store}. Configured {DEFAULT_MODEL}."
+            )
+            self._refresh_vault_card()
+            self._announce_ready()
+
+        self.push_screen(ProviderSelectScreen(), finished)
+
+    def _announce_ready(self) -> None:
+        chat = self.query_one(ChatPanel)
+        if self._vault_context is not None:
+            chat.append_assistant(self._vault_context.summary)
+            if not getattr(self._vault_context, "inside", False) and self._vault_context.found:
+                chat.append_assistant(
+                    "You are outside the vault; notes will still be written into it."
+                )
+        chat.append_assistant(
+            "Ready. Type a topic to generate a note, or /help for commands."
+        )
+        self.set_focus(self.query_one("#chat-input", Input))
+
+    def _refresh_vault_card(self) -> None:
+        if not self._vault:
+            return
+        meta = self.query_one(MetadataPanel)
+        provider_name = getattr(self._provider, "name", "not configured") if self._provider else "not configured"
+        model_name = getattr(self._provider, "_model", "") if self._provider else ""
+        ctx = self._vault_context
+        meta.vault_card.set_info(
+            self._vault.root.name, str(self._vault.root),
+            provider_name, model_name,
+            badge=getattr(ctx, "badge", "") if ctx else "",
+            where=str(getattr(ctx, "relative", "") or "") if ctx else "",
+        )
+
+    async def on_unmount(self) -> None:
+        """Release the bus pump.
+
+        pump_bus blocks on queue.get(); without a sentinel the worker never
+        finishes and Textual waits on it forever at shutdown. Closing the bus
+        pushes the None sentinel that lets drain() return.
+        """
+        try:
+            await self._bus.close()
+        except Exception:  # noqa: BLE001 - shutdown must never raise
+            pass
 
     def on_event_message(self, message: EventMessage) -> None:
         handler = self._table.get(type(message.event))

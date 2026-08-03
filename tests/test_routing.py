@@ -82,8 +82,8 @@ ROUTING_CASES: list[tuple[str, str]] = [
     ("The Riemann hypothesis and number theory", "haytham"),
     ("Geodesic equations in astronomy", "haytham"),
     # reason
-    ("Kant's epistemology and the limits of metaphysics", "avicenna"),
-    ("Hegel's dialectic and the absolute idea", "avicenna"),
+    ("Kant's epistemology and the limits of metaphysics", "rousseau"),
+    ("Hegel's dialectic and the absolute idea", "rousseau"),
     # literature
     ("The myth of Orpheus and Eurydice", "tolstoy"),
     ("Narrative craft in the short story", "tolstoy"),

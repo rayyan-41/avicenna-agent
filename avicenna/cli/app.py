@@ -74,7 +74,15 @@ def route_cmd(
     from avicenna.vault.routing import route_request, score_domains
     from avicenna.vault.vault import Vault
 
-    bound = Vault.load(discover_vault(explicit=vault))
+    from avicenna.vault.context import VaultContext
+
+    ctx = VaultContext.detect(explicit=vault)
+    if not ctx.found:
+        typer.echo("No vault found. Run `avicenna init` or pass --vault.", err=True)
+        raise typer.Exit(1)
+    bound = Vault.load(ctx.root)
+    typer.echo(f"[{ctx.badge}] {ctx.summary}")
+    typer.echo("")
     chosen = route_request(bound, topic)
 
     typer.echo(f"topic: {topic}")
@@ -102,8 +110,20 @@ def note_cmd(
     from avicenna.vault.discovery import discover_vault
     from avicenna.vault.vault import Vault
 
-    vault_path = discover_vault(explicit=vault)
-    bound_vault = Vault.load(vault_path)
+    from avicenna.vault.context import VaultContext
+
+    ctx = VaultContext.detect(explicit=vault)
+    if not ctx.found:
+        typer.echo("No vault found. Run `avicenna init` or pass --vault.", err=True)
+        raise typer.Exit(1)
+    bound_vault = Vault.load(ctx.root)
+    typer.echo(f"[{ctx.badge}] {ctx.summary}")
+
+    # Standing inside History/Biographies is a strong statement about intent,
+    # so use it rather than making the router guess from the topic alone.
+    hint_domain, hint_category = ctx.location_hint(bound_vault)
+    if hint_domain:
+        typer.echo(f"location hint: domain={hint_domain} category={hint_category}")
 
     # Dry run still calls the model: it performs routing AND pre-flight, which
     # is the whole point (it exercises the riskiest parser for one completion).
@@ -120,6 +140,7 @@ def note_cmd(
         topic, provider, bound_vault,
         dry_run=dry_run, concurrency=concurrency,
         resume=resume, fresh=not resume,
+        domain_override=hint_domain,
     ))
     typer.echo("Done.")
 
@@ -201,31 +222,54 @@ def mcp_tools() -> None:
 # ---------------------------------------------------------------------------
 
 def _tui_launch(vault_path: Path | None, reconfigure: bool) -> None:
-    from avicenna.tui.app import AvicennaApp
-    from avicenna.vault.discovery import discover_vault, VaultNotFound
-    from avicenna.vault.vault import Vault
     from avicenna.bus import EventBus
+    from avicenna.config import Config
+    from avicenna.secrets import read_api_key
+    from avicenna.tui.app import AvicennaApp
+    from avicenna.vault.context import VaultContext
+    from avicenna.vault.vault import Vault
 
-    try:
-        vault_root = discover_vault(explicit=vault_path)
-        bound_vault = Vault.load(vault_root)
-    except VaultNotFound:
-        typer.echo("No vault found. Run 'avicenna init' first, or pass --vault.", err=True)
+    ctx = VaultContext.detect(explicit=vault_path)
+    if not ctx.found:
+        typer.echo(
+            "No vault found here.\n"
+            "  - run `avicenna init <path>` to scaffold one, or\n"
+            "  - pass --vault <path>, or\n"
+            "  - cd into a vault (a folder with AGENTS.md and .agents/)",
+            err=True,
+        )
         raise typer.Exit(1)
 
-    bus = EventBus()
-    app = AvicennaApp(vault=bound_vault, bus=bus)
+    bound_vault = Vault.load(ctx.root)
+    typer.echo(f"[{ctx.badge}] {ctx.summary}")
+
+    # Onboarding is driven by the TUI itself. Passing provider=None is what
+    # triggers it, so --reconfigure simply withholds the stored key.
+    provider = None
+    if not reconfigure:
+        key = read_api_key()
+        if key:
+            from avicenna.providers.registry import get_provider
+            provider = get_provider(
+                "mistral", api_key=key,
+                model=Config.load_user_config().get("model", Config.MISTRAL_MODEL),
+            )
+
+    app = AvicennaApp(
+        vault=bound_vault, bus=EventBus(), provider=provider, context=ctx
+    )
     app.run()
 
 
 def _headless_launch(vault_path: Path | None) -> None:
-    typer.echo("Headless mode — ready for batch runs. Use 'avicenna note <topic>'.")
-    from avicenna.vault.discovery import discover_vault
-    try:
-        v = discover_vault(explicit=vault_path)
-        typer.echo(f"Vault: {v}")
-    except Exception as exc:
-        typer.echo(f"Warning: {exc}")
+    from avicenna.vault.context import VaultContext
+
+    ctx = VaultContext.detect(explicit=vault_path)
+    typer.echo(f"[{ctx.badge}] {ctx.summary}")
+    if ctx.found:
+        typer.echo("Headless mode. Use `avicenna note \"<topic>\"` to generate.")
+    else:
+        raise typer.Exit(1)
 
 
 def main() -> None:
