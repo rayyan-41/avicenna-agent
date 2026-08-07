@@ -1,8 +1,11 @@
-"""StatsBar: compact single-line running statistics."""
+"""StatsBar: compact single-line running statistics with neon green."""
 from __future__ import annotations
 
 from rich.text import Text
 from textual.widgets import Static
+
+NEON_GREEN = "#00FF41"
+DIM_GREEN = "#00AA2A"
 
 
 class StatsBar(Static):
@@ -17,19 +20,19 @@ class StatsBar(Static):
         self._tags: list[str] = []
 
     def on_mount(self) -> None:
-        self.border_title = "Stats"
+        self.border_title = " Stats "
 
     def render(self) -> Text:
         text = Text()
-        text.append("  Words: ", style="dim")
-        text.append(str(self._total_words), style="bold")
-        text.append("  |  Sections: ", style="dim")
-        text.append(f"{self._done}/{self._total_sections}", style="bold")
-        text.append("  |  Tools: ", style="dim")
-        text.append(str(self._tool_calls), style="bold")
+        text.append("Words: ", style="dim")
+        text.append(str(self._total_words), style=f"bold {NEON_GREEN}")
+        text.append("  Sections: ", style="dim")
+        text.append(f"{self._done}/{self._total_sections}", style=f"bold {NEON_GREEN}")
+        text.append("  Tools: ", style="dim")
+        text.append(str(self._tool_calls), style=f"bold {NEON_GREEN}")
         if self._tags:
-            text.append("  |  Tags: ", style="dim")
-            text.append(", ".join(self._tags), style="cyan")
+            text.append("  Tags: ", style="dim")
+            text.append(", ".join(self._tags), style=NEON_GREEN)
         return text
 
     def set_total_sections(self, n: int) -> None:

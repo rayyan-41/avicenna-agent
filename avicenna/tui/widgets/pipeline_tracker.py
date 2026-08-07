@@ -1,8 +1,11 @@
-"""PipelineTracker: horizontal stage stepper with progress indicators."""
+"""PipelineTracker: horizontal stage stepper with neon green progress."""
 from __future__ import annotations
 
 from rich.text import Text
 from textual.widgets import Static
+
+NEON_GREEN = "#00FF41"
+DIM_GREEN = "#00AA2A"
 
 STAGES = [
     "route", "preflight", "manifest", "sections", "assembly",
@@ -19,22 +22,22 @@ class PipelineTracker(Static):
         self._current: str = ""
 
     def on_mount(self) -> None:
-        self.border_title = "Pipeline"
+        self.border_title = " Pipeline "
 
     def render(self) -> Text:
         text = Text()
         for i, stage in enumerate(STAGES):
             if i > 0:
-                text.append("  ")
+                text.append(" ")
             if stage in self._done:
-                text.append("●", style="green")
-                text.append(f" {stage}", style="dim")
+                text.append("●", style=NEON_GREEN)
+                text.append(stage, style=f"dim {DIM_GREEN}")
             elif stage == self._current:
-                text.append("◉", style="bold yellow")
-                text.append(f" {stage}", style="bold yellow")
+                text.append("◉", style=f"bold {NEON_GREEN}")
+                text.append(stage, style=f"bold {NEON_GREEN}")
             else:
                 text.append("○", style="dim")
-                text.append(f" {stage}", style="dim")
+                text.append(stage, style="dim")
         return text
 
     def set_stage(self, stage: str) -> None:

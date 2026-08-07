@@ -1,4 +1,6 @@
-/* Avicenna TUI — modern cockpit theme */
+/* Avicenna TUI — Cline-style harness with neon green accent */
+
+/* Color definitions (neon green accent) */
 
 /* Root layout */
 #body {
@@ -6,11 +8,11 @@
     height: 1fr;
 }
 
-/* Left panel: metadata */
+/* Left panel: compact status sidebar */
 #meta {
-    width: 38%;
-    min-width: 40;
-    border-right: heavy $primary-darken-2;
+    width: 30;
+    min-width: 30;
+    border-right: tall $accent-darken-2;
     padding: 0 1;
     background: $surface;
 }
@@ -24,23 +26,24 @@
 /* Input bar at bottom */
 #chat-input {
     dock: bottom;
-    border-top: heavy $primary-darken-2;
+    border-top: tall $accent-darken-2;
     padding: 0 1;
+    height: 3;
     background: $surface;
 }
 
 /* Vault card */
 #vault-card {
-    border: round $primary-darken-1;
+    border: round $accent-darken-1;
     padding: 0 1;
     margin-bottom: 1;
     background: $surface-darken-1;
-    height: 7;
+    height: 5;
 }
 
 /* Pipeline tracker */
 #pipeline-tracker {
-    border: round $primary-darken-1;
+    border: round $accent-darken-1;
     padding: 0 1;
     margin-bottom: 1;
     background: $surface-darken-1;
@@ -51,13 +54,13 @@
 #heading-grid {
     height: 1fr;
     min-height: 4;
-    border: round $primary-darken-1;
+    border: round $accent-darken-1;
     margin-bottom: 1;
 }
 
 /* Stats bar */
 #stats-bar {
-    border: round $primary-darken-1;
+    border: round $accent-darken-1;
     padding: 0 1;
     background: $surface-darken-1;
     height: 3;
@@ -65,10 +68,44 @@
 
 /* Header */
 Header {
-    background: $primary-darken-2;
+    background: $surface-darken-2;
+    color: $accent;
+    text-style: bold;
 }
 
 /* Footer */
 Footer {
-    background: $primary-darken-2;
+    background: $surface-darken-2;
+    color: $text-muted;
+}
+
+/* Input styling */
+Input {
+    background: $surface-darken-1;
+    border: tall $accent-darken-1;
+    color: $text;
+}
+
+Input:focus {
+    border: tall $accent;
+    background: $surface;
+}
+
+/* DataTable styling */
+DataTable {
+    background: $surface-darken-1;
+}
+
+DataTable > .datatable--header {
+    background: $surface-darken-2;
+    color: $accent;
+    text-style: bold;
+}
+
+DataTable > .datatable--row {
+    background: $surface-darken-1;
+}
+
+DataTable > .datatable--row:hover {
+    background: $surface;
 }

@@ -25,8 +25,12 @@ from avicenna.tui.panels import MetadataPanel
 from avicenna.tui.widgets import ChatView
 
 
+NEON_GREEN = "#00FF41"
+
+
 class AvicennaApp(App[None]):
     CSS_PATH = "app.tcss"
+    ACCENT_COLOR = NEON_GREEN
     BINDINGS = [
         ("ctrl+c", "cancel_run", "Cancel run"),
         ("ctrl+q", "quit", "Quit"),
