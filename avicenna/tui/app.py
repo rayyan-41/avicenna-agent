@@ -7,7 +7,6 @@ exclusive worker; the bus pump is non-exclusive.
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -22,7 +21,8 @@ from avicenna.bus import EventBus
 from avicenna.pipeline.run import execute_run
 from avicenna.tui.dispatch import build_table
 from avicenna.tui.messages import EventMessage, pump_bus
-from avicenna.tui.panels import ChatPanel, MetadataPanel
+from avicenna.tui.panels import MetadataPanel
+from avicenna.tui.widgets import ChatView
 
 
 class AvicennaApp(App[None]):
@@ -53,7 +53,7 @@ class AvicennaApp(App[None]):
         yield Header(show_clock=True)
         with Horizontal(id="body"):
             yield MetadataPanel(id="meta")
-            yield ChatPanel(id="chat")
+            yield ChatView(id="chat")
         yield Input(id="chat-input", placeholder="Type a topic or /command...")
         yield Footer()
 
@@ -62,12 +62,6 @@ class AvicennaApp(App[None]):
         self._refresh_vault_card()
 
         if self._provider is None:
-            # First run, or no usable key: onboard before anything else.
-            #
-            # Deferred with call_after_refresh rather than pushed inline:
-            # push_screen during on_mount runs before the initial refresh has
-            # completed, and Textual deadlocks waiting for a screen that is
-            # being mounted from inside mount. This hung the app on first run.
             self.call_after_refresh(self._begin_onboarding)
             return
 
@@ -95,7 +89,6 @@ class AvicennaApp(App[None]):
                 onboarded=True, provider=DEFAULT_PROVIDER,
                 model=DEFAULT_MODEL, key_store=store,
             )
-            # Remember this vault so `avicenna` works from anywhere next time.
             if self._vault is not None:
                 cfg["default_vault"] = str(self._vault.root)
             Config.save_user_config(cfg)
@@ -103,8 +96,8 @@ class AvicennaApp(App[None]):
             self._provider = get_provider(
                 DEFAULT_PROVIDER, api_key=key, model=DEFAULT_MODEL
             )
-            chat = self.query_one(ChatPanel)
-            chat.append_assistant(
+            chat = self.query_one(ChatView)
+            chat.write_assistant(
                 f"Key saved to your {store}. Configured {DEFAULT_MODEL}."
             )
             self._refresh_vault_card()
@@ -113,14 +106,14 @@ class AvicennaApp(App[None]):
         self.push_screen(ProviderSelectScreen(), finished)
 
     def _announce_ready(self) -> None:
-        chat = self.query_one(ChatPanel)
+        chat = self.query_one(ChatView)
         if self._vault_context is not None:
-            chat.append_assistant(self._vault_context.summary)
+            chat.write_assistant(self._vault_context.summary)
             if not getattr(self._vault_context, "inside", False) and self._vault_context.found:
-                chat.append_assistant(
+                chat.write_assistant(
                     "You are outside the vault; notes will still be written into it."
                 )
-        chat.append_assistant(
+        chat.write_assistant(
             "Ready. Type a topic to generate a note, or /help for commands."
         )
         self.set_focus(self.query_one("#chat-input", Input))
@@ -140,12 +133,6 @@ class AvicennaApp(App[None]):
         )
 
     async def on_unmount(self) -> None:
-        """Release the bus pump.
-
-        pump_bus blocks on queue.get(); without a sentinel the worker never
-        finishes and Textual waits on it forever at shutdown. Closing the bus
-        pushes the None sentinel that lets drain() return.
-        """
         try:
             await self._bus.close()
         except Exception:  # noqa: BLE001 - shutdown must never raise
@@ -155,15 +142,14 @@ class AvicennaApp(App[None]):
         handler = self._table.get(type(message.event))
         if handler is not None:
             handler(message.event)
-        self.query_one(ChatPanel).log_event(message.event)
 
     def start_run(self, topic: str) -> None:
         rid = str(uuid.uuid4())[:8]
-        self.query_one(ChatPanel).append_user(topic)
+        self.query_one(ChatView).write_user(topic)
         vault = self._vault
         provider = self._provider
         if vault is None or provider is None:
-            self.query_one(ChatPanel).append_error("No vault or provider configured. Run avicenna init first.")
+            self.query_one(ChatView).write_error("No vault or provider configured. Run avicenna init first.")
             return
         self._run_worker = self.run_worker(
             execute_run(
@@ -176,13 +162,13 @@ class AvicennaApp(App[None]):
     def action_cancel_run(self) -> None:
         if self._run_worker is not None and self._run_worker.is_running:
             self._run_worker.cancel()
-            self.query_one(ChatPanel).append_error("Run cancelled.")
+            self.query_one(ChatView).write_error("Run cancelled.")
 
     def action_clear_chat(self) -> None:
-        self.query_one(ChatPanel).append_assistant("Chat cleared.")
+        self.query_one(ChatView).write_assistant("Chat cleared.")
 
     def action_help(self) -> None:
-        self.query_one(ChatPanel).append_assistant(
+        self.query_one(ChatView).write_assistant(
             "Commands: Ctrl+C cancel, Ctrl+Q quit, Ctrl+L clear.\n"
             "Type a topic to generate a note."
         )
@@ -192,19 +178,18 @@ class AvicennaApp(App[None]):
     # ------------------------------------------------------------------
 
     def _on_run_started(self, e: ev.RunStarted) -> None:
-        self.query_one(ChatPanel).append_pipeline(f"Run started: {e.topic}")
+        self.query_one(ChatView).write_pipeline(f"Run started: {e.topic}")
 
     def _on_preflight_declared(self, e: ev.PreflightDeclared) -> None:
         meta = self.query_one(MetadataPanel)
-        meta.preflight.update_from(e)
         meta.grid.seed(e.headings)
         meta.stats.set_total_sections(len(e.headings))
-        self.query_one(ChatPanel).append_pipeline(
+        self.query_one(ChatView).write_pipeline(
             f"Pre-flight: {e.topic} ({e.domain}/{e.template}) — {len(e.headings)} headings, ~{e.target_words} words"
         )
 
     def _on_manifest_written(self, e: ev.ManifestWritten) -> None:
-        self.query_one(ChatPanel).append_pipeline(f"Manifest written: {e.slug} ({e.expected_count} chunks)")
+        self.query_one(ChatView).write_pipeline(f"Manifest written: {e.slug} ({e.expected_count} chunks)")
 
     def _on_section_started(self, e: ev.SectionStarted) -> None:
         self.query_one(MetadataPanel).grid.started(e)
@@ -214,65 +199,65 @@ class AvicennaApp(App[None]):
         meta.grid.completed(e)
         meta.stats.mark_section_done()
         meta.stats.add_words(e.words)
-        self.query_one(ChatPanel).append_pipeline(f"  [{e.index}] {e.heading} — {e.words} words ({e.elapsed:.1f}s)")
+        self.query_one(ChatView).write_pipeline(f"  [{e.index}] {e.heading} — {e.words} words ({e.elapsed:.1f}s)")
 
     def _on_section_failed(self, e: ev.SectionFailed) -> None:
         self.query_one(MetadataPanel).grid.failed(e)
         if e.will_retry:
-            self.query_one(ChatPanel).append_error(f"  [{e.index}] {e.heading} failed, retrying...")
+            self.query_one(ChatView).write_error(f"  [{e.index}] {e.heading} failed, retrying...")
         else:
-            self.query_one(ChatPanel).append_error(f"  [{e.index}] {e.heading} FAILED: {e.error}")
+            self.query_one(ChatView).write_error(f"  [{e.index}] {e.heading} FAILED: {e.error}")
 
     def _on_stage_entered(self, e: ev.StageEntered) -> None:
         self.query_one(MetadataPanel).tracker.set_stage(e.stage)
-        self.query_one(ChatPanel).append_pipeline(f"--- Stage: {e.stage} ---")
+        self.query_one(ChatView).write_pipeline(f"--- Stage: {e.stage} ---")
 
     def _on_stage_completed(self, e: ev.StageCompleted) -> None:
         self.query_one(MetadataPanel).tracker.mark_done(e.stage)
 
     def _on_tool_invoked(self, e: ev.ToolInvoked) -> None:
         self.query_one(MetadataPanel).stats.inc_tool()
-        self.query_one(ChatPanel).append_pipeline(f"  Tool: {e.name} [{e.source}]")
+        self.query_one(ChatView).write_pipeline(f"  Tool: {e.name} [{e.source}]")
 
     def _on_tool_returned(self, e: ev.ToolReturned) -> None:
         status = "OK" if e.ok else "FAIL"
-        self.query_one(ChatPanel).append_pipeline(f"  Tool done: {e.name} {status} ({e.elapsed:.1f}s)")
+        self.query_one(ChatView).write_pipeline(f"  Tool done: {e.name} {status} ({e.elapsed:.1f}s)")
 
     def _on_wordcount_checked(self, e: ev.WordCountChecked) -> None:
         if e.verdict == "fail":
-            self.query_one(ChatPanel).append_error(f"Word count: {e.actual}/{e.minimum} — below target")
+            self.query_one(ChatView).write_error(f"Word count: {e.actual}/{e.minimum} — below target")
         else:
-            self.query_one(ChatPanel).append_pipeline(f"Word count: {e.actual} — OK")
+            self.query_one(ChatView).write_pipeline(f"Word count: {e.actual} — OK")
 
     def _on_tags_proposed(self, e: ev.TagsProposed) -> None:
         self.query_one(MetadataPanel).stats.set_tags(list(e.tags))
 
     def _on_tags_validated(self, e: ev.TagsValidated) -> None:
         if e.verdict == "fail":
-            self.query_one(ChatPanel).append_error(f"Tag validation: {e.message}")
+            self.query_one(ChatView).write_error(f"Tag validation: {e.message}")
         else:
-            self.query_one(ChatPanel).append_pipeline(f"Tags accepted: {', '.join(e.accepted)}")
+            self.query_one(ChatView).write_pipeline(f"Tags accepted: {', '.join(e.accepted)}")
 
     def _on_link_candidates_found(self, e: ev.LinkCandidatesFound) -> None:
-        self.query_one(ChatPanel).append_pipeline(f"Link candidates: {e.count}")
+        self.query_one(ChatView).write_pipeline(f"Link candidates: {e.count}")
 
     def _on_moc_updated(self, e: ev.MocUpdated) -> None:
-        self.query_one(ChatPanel).append_pipeline(f"MOC: {e.result}")
+        self.query_one(ChatView).write_pipeline(f"MOC: {e.result}")
 
     def _on_note_written(self, e: ev.NoteWritten) -> None:
-        self.query_one(ChatPanel).append_pipeline(f"Note written: {e.path} ({e.words} words)")
+        self.query_one(ChatView).write_pipeline(f"Note written: {e.path} ({e.words} words)")
 
     def _on_run_failed(self, e: ev.RunFailed) -> None:
         stage = f" [{e.stage}]" if e.stage else ""
-        self.query_one(ChatPanel).append_error(f"RUN FAILED{stage}: {e.error}")
+        self.query_one(ChatView).write_error(f"RUN FAILED{stage}: {e.error}")
 
     def _on_run_complete(self, e: ev.RunComplete) -> None:
-        self.query_one(ChatPanel).append_assistant(
+        self.query_one(ChatView).write_assistant(
             f"Done! {e.summary}\n{e.total_words} words in {e.elapsed:.1f}s"
         )
 
     def _on_log_message(self, e: ev.LogMessage) -> None:
         if e.level in ("warning", "error"):
-            self.query_one(ChatPanel).append_error(f"[{e.level}] {e.text}")
+            self.query_one(ChatView).write_error(f"[{e.level}] {e.text}")
         else:
-            self.query_one(ChatPanel).append_pipeline(f"[{e.level}] {e.text}")
+            self.query_one(ChatView).write_pipeline(f"[{e.level}] {e.text}")

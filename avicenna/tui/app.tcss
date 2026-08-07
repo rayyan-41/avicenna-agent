@@ -1,74 +1,74 @@
-# avicenna/tui/app.tcss
+/* Avicenna TUI — modern cockpit theme */
 
-# Two-pane layout
+/* Root layout */
 #body {
     layout: horizontal;
     height: 1fr;
 }
 
+/* Left panel: metadata */
 #meta {
-    width: 36%;
-    min-width: 38;
-    border-right: solid $primary-darken-2;
+    width: 38%;
+    min-width: 40;
+    border-right: heavy $primary-darken-2;
     padding: 0 1;
+    background: $surface;
 }
 
+/* Right panel: chat (ChatView is RichLog) */
 #chat {
     width: 1fr;
-    padding: 0 1;
+    background: $surface-darken-1;
 }
 
+/* Input bar at bottom */
 #chat-input {
     dock: bottom;
-    border-top: solid $primary-darken-2;
+    border-top: heavy $primary-darken-2;
     padding: 0 1;
+    background: $surface;
 }
 
-HeadingGrid {
+/* Vault card */
+#vault-card {
+    border: round $primary-darken-1;
+    padding: 0 1;
+    margin-bottom: 1;
+    background: $surface-darken-1;
+    height: 7;
+}
+
+/* Pipeline tracker */
+#pipeline-tracker {
+    border: round $primary-darken-1;
+    padding: 0 1;
+    margin-bottom: 1;
+    background: $surface-darken-1;
+    height: 3;
+}
+
+/* Heading grid */
+#heading-grid {
     height: 1fr;
-    min-height: 8;
-}
-
-.stage-current {
-    color: $success;
-    text-style: bold;
-}
-
-.stage-done {
-    color: $text-muted;
-}
-
-.pipeline-line {
-    color: $text-muted;
-}
-
-.chat-user {
-    color: $accent;
-    text-style: bold;
-}
-
-.chat-assistant {
-    color: $text;
-}
-
-.chat-error {
-    color: $error;
-}
-
-.vault-card {
-    border: solid $primary-darken-2;
-    padding: 0 1;
+    min-height: 4;
+    border: round $primary-darken-1;
     margin-bottom: 1;
 }
 
-.status-ok {
-    color: $success;
+/* Stats bar */
+#stats-bar {
+    border: round $primary-darken-1;
+    padding: 0 1;
+    background: $surface-darken-1;
+    height: 3;
 }
 
-.status-warn {
-    color: $warning;
+/* Header */
+Header {
+    background: $primary-darken-2;
 }
 
-.status-error {
-    color: $error;
+/* Footer */
+Footer {
+    background: $primary-darken-2;
 }
