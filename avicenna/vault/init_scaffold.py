@@ -51,6 +51,12 @@ the body text for the given heading, do not restate the heading, and do not
 add frontmatter or wikilinks.
 """
 
+MCP_JSON = """{
+  "version": "2.0",
+  "mcp_servers": []
+}
+"""
+
 TMP_GITIGNORE = "*\n"
 
 
@@ -68,5 +74,6 @@ def init_vault(target: str | Path) -> Path:
     (target / "AGENTS.md").write_text(VAULT_AGENTS_MD.strip() + "\n", encoding="utf-8", newline="\n")
     (agents_dir / "taxonomy.json").write_text(VAULT_TAXONOMY_JSON.strip() + "\n", encoding="utf-8", newline="\n")
     (agents_dir / "agents" / "scribe.md").write_text(SCRIBE_AGENT_MD.strip() + "\n", encoding="utf-8", newline="\n")
+    (agents_dir / "mcp.json").write_text(MCP_JSON.strip() + "\n", encoding="utf-8", newline="\n")
     (tmp_dir / ".gitignore").write_text(TMP_GITIGNORE, encoding="utf-8", newline="\n")
     return target

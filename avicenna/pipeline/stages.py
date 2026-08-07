@@ -165,8 +165,16 @@ class SectionsStage(PipelineStage):
     name: Stage = "sections"
 
     async def run(self, ctx: RunContext) -> None:
-        indices = list(range(1, len(ctx.headings) + 1))
-        await generate_sections(ctx, indices)
+        if ctx.spec.resume:
+            from avicenna.pipeline.resume import plan_sections
+            indices = plan_sections(ctx, ctx.slug, ctx.headings)
+            if not indices:
+                await ctx.emit(LogMessage, level="info",
+                               text="all sections present from previous run; nothing to regenerate")
+        else:
+            indices = list(range(1, len(ctx.headings) + 1))
+        if indices:
+            await generate_sections(ctx, indices)
         try:
             await invoke_tool(ctx, "update_pipeline_state",
                 Slug=ctx.slug, Stage="yolo", Status="complete")

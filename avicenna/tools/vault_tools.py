@@ -13,7 +13,7 @@ from avicenna.tools.base import ToolAccess
 from avicenna.tools.powershell import PowerShellTool
 from avicenna.tools.registry import ToolRegistry
 
-VAULT_TOOL_MANIFEST: dict[str, dict] = {
+VAULT_TOOL_MANIFEST: dict[str, dict[str, object]] = {
     "write_manifest.ps1": {
         "name": "write_manifest",
         "description": "Create the generated-note manifest spec tracking all chunks and state",

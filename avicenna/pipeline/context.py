@@ -60,7 +60,7 @@ class RunContext:
 
     @property
     def tmp_dir(self) -> Path:
-        return self.spec.vault.tmp_dir
+        return Path(self.spec.vault.tmp_dir)
 
     def chunk_path(self, index: int) -> Path:
         assert self.slug is not None, "slug not set"
