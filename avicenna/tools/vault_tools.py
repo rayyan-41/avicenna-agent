@@ -8,12 +8,28 @@ as PIPELINE_ONLY with a warning.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TypedDict
 
 from avicenna.tools.base import ToolAccess
 from avicenna.tools.powershell import PowerShellTool
 from avicenna.tools.registry import ToolRegistry
 
-VAULT_TOOL_MANIFEST: dict[str, dict[str, object]] = {
+
+class ToolEntry(TypedDict):
+    """One manifest row.
+
+    Typed rather than `dict[str, object]` so the fields keep their types all
+    the way to the PowerShellTool constructor; with a bare object-valued dict
+    every field arrived as `object` and had to be cast at the call site.
+    """
+
+    name: str
+    description: str
+    parameters: dict[str, object]
+    access: ToolAccess
+
+
+VAULT_TOOL_MANIFEST: dict[str, ToolEntry] = {
     "write_manifest.ps1": {
         "name": "write_manifest",
         "description": "Create the generated-note manifest spec tracking all chunks and state",
@@ -175,12 +191,12 @@ def register_vault_tools(vault_root: Path, registry: ToolRegistry) -> None:
             import logging
             logger = logging.getLogger(__name__)
             logger.warning("vault tool %s has no manifest entry; registering as pipeline-only", filename)
-            entry = {
-                "name": script_path.stem,
-                "description": f"Vault tool: {script_path.stem}",
-                "parameters": {"type": "object", "properties": {}},
-                "access": ToolAccess.PIPELINE_ONLY,
-            }
+            entry = ToolEntry(
+                name=script_path.stem,
+                description=f"Vault tool: {script_path.stem}",
+                parameters={"type": "object", "properties": {}},
+                access=ToolAccess.PIPELINE_ONLY,
+            )
         tool = PowerShellTool(
             name=entry["name"],
             script=script_path,

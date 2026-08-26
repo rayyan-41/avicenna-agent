@@ -12,13 +12,14 @@ from collections.abc import Mapping
 from typing import Any
 
 from avicenna.tools.base import Tool, ToolAccess, ToolResult, ToolSource
+from avicenna.tools.registry import ToolRegistry
 
 
 class MCPTool(Tool):
     source = ToolSource.MCP
     access = ToolAccess.MODEL_CALLABLE
 
-    def __init__(self, manager, name: str,
+    def __init__(self, manager: Any, name: str,
                  description: str, parameters: Mapping[str, object]) -> None:
         self._manager = manager
         self.name = name
@@ -36,7 +37,7 @@ class MCPTool(Tool):
                           time.perf_counter() - started)
 
 
-def register_mcp_tools(manager, registry) -> list[str]:
+def register_mcp_tools(manager: Any, registry: ToolRegistry) -> list[str]:
     names: list[str] = []
     for spec in manager.tool_specs():
         names.append(registry.register(
