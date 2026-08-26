@@ -25,7 +25,31 @@ class PipelineAbort(Exception):
 
 
 class PipelineStage(ABC):
+    """One step of a run.
+
+    Two identifiers, deliberately distinct:
+
+    * ``name`` is the *user-facing* label that crosses the wire as a ``Stage``
+      literal. Several stages legitimately share one — routing and pre-flight
+      both read as "preflight" to the user, tagging and formatting both read
+      as "tagging".
+    * ``id`` is this stage's *identity*. It must be unique across the stage
+      list, because timings, completion records and the dry-run filter key on
+      it. These were once the same field, and the collision meant a stage's
+      timing silently overwrote its neighbour's and the dry-run filter selected
+      by label — so adding any future stage under an existing label would have
+      silently joined the dry run.
+    """
+
     name: Stage
+    id: str = ""
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        super().__init_subclass__(**kwargs)
+        # Default the identity to the label, so a stage with no collision does
+        # not have to declare the same string twice.
+        if not cls.__dict__.get("id"):
+            cls.id = cls.__dict__.get("name", getattr(cls, "name", "")) or cls.__name__
 
     async def should_run(self, ctx: RunContext) -> bool:
         return True
@@ -58,7 +82,8 @@ class PipelineRunner:
                 )
                 return False
             elapsed = time.perf_counter() - start
-            ctx.timings[stage.name] = elapsed
-            ctx.stages_completed.append(stage.name)
+            # Keyed on identity, not label: two stages may share a label.
+            ctx.timings[stage.id] = elapsed
+            ctx.stages_completed.append(stage.id)
             await ctx.emit(StageCompleted, stage=stage.name, elapsed=elapsed)
         return True

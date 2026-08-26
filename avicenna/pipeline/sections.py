@@ -7,12 +7,16 @@ for fresh context, retries once on exception or empty output, and Python
 
 from __future__ import annotations
 
+import asyncio
+import os
 import time
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 
 from avicenna.concurrency import gather_sections
 from avicenna.events import SectionCompleted, SectionFailed, SectionStarted
 from avicenna.pipeline.context import RunContext
+from avicenna.pipeline.delegate import tools_for_agent
 from avicenna.session import one_shot
 
 SECTION_PROMPT = """You are writing ONE section of a longer note titled "{topic}".
@@ -39,9 +43,30 @@ def _count_words(text: str) -> int:
     return len(text.split())
 
 
+def _write_chunk(path: Path, text: str) -> None:
+    """Write one chunk atomically, off the event loop.
+
+    Atomically because resume decides a chunk is complete by looking at it: a
+    chunk truncated by a kill mid-write would be woven into the note as though
+    it were finished. Off the loop because sections run concurrently and a
+    synchronous write blocks every other section's progress for its duration.
+    """
+    tmp = path.with_suffix(path.suffix + ".part")
+    tmp.write_text(text, encoding="utf-8", newline="\n")
+    os.replace(tmp, path)
+
+
 def _build_task(ctx: RunContext, index: int, heading: str) -> Callable[[], Awaitable[int]]:
     spec = ctx.spec
     assert ctx.agent is not None and ctx.domain is not None
+    # Bound outside the closure so the narrowing survives into `task()`; the
+    # closure reading ctx.agent directly widened it back to AgentDef | None.
+    agent = ctx.agent
+    # A section is where MCP earns its place: writing on the necessity of
+    # revelation, this is the call that can pull the actual passage out of a
+    # reference server instead of reconstructing it from memory. Sections used
+    # to be the one delegation given no tools at all.
+    section_tools = tools_for_agent(spec.vault, agent)
     outline = "\n".join(f"{i}. {h}" for i, h in enumerate(ctx.headings, start=1))
     prompt = SECTION_PROMPT.format(
         topic=spec.topic, heading=heading, index=index, total=len(ctx.headings),
@@ -57,8 +82,10 @@ def _build_task(ctx: RunContext, index: int, heading: str) -> Callable[[], Await
             try:
                 text = await one_shot(
                     provider=spec.provider,
-                    system=ctx.agent.system_prompt,
+                    system=agent.system_prompt,
                     prompt=prompt,
+                    tools=section_tools or None,
+                    tool_runner=spec.vault.tools.runner if section_tools else None,
                     bus=spec.bus,
                     run_id=spec.run_id,
                     section_index=index,
@@ -77,7 +104,7 @@ def _build_task(ctx: RunContext, index: int, heading: str) -> Callable[[], Await
                 ctx.failed_sections.append(index)
                 return 0
             path = ctx.chunk_path(index)
-            path.write_text(text.strip() + "\n", encoding="utf-8", newline="\n")
+            await asyncio.to_thread(_write_chunk, path, text.strip() + "\n")
             ctx.chunk_paths[index] = path
             words = _count_words(text)
             await ctx.emit(
