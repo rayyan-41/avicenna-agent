@@ -5,6 +5,8 @@ Manages connections to multiple MCP servers with support for:
 - Node.js packages (via npx)
 - Direct executables
 """
+from __future__ import annotations
+
 import asyncio
 import logging
 import shutil
@@ -31,7 +33,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _tool_schema(tool: object) -> dict:
+def _tool_schema(tool: object) -> dict[str, Any]:
     """Read an MCP tool's JSON Schema across SDK major versions.
 
     mcp 1.x exposed `Tool.inputSchema`. mcp 2.x renamed the attribute to
@@ -221,25 +223,6 @@ class MCPClientManager:
             logger.debug(traceback.format_exc())
             return False
     
-    async def connect_all(self, server_configs: List[MCPServerConfig]) -> Dict[str, bool]:
-        """
-        Connect to all enabled servers
-        
-        Returns:
-            Dict mapping server name to connection success status
-        """
-        results = {}
-        
-        for config in server_configs:
-            if not config.enabled:
-                logger.info(f"Skipping disabled server: {config.name}")
-                results[config.name] = False
-                continue
-            
-            results[config.name] = await self.connect_server(config)
-        
-        return results
-    
     async def call_tool(
         self,
         tool_name: str,
@@ -321,162 +304,6 @@ class MCPClientManager:
             ))
         return specs
 
-    def get_gemini_tools(self) -> List[Any]:
-        """
-        Convert MCP tools to Gemini Tool format.
-
-        Returns:
-            List of google.genai Tool objects. Typed as List[Any] because
-            google-genai is an optional extra and is imported lazily below.
-        """
-        from google.genai import types as genai_types
-
-        function_declarations = []
-
-        for tool_name, mcp_tool in self.tools.items():
-            function_decl = genai_types.FunctionDeclaration(
-                name=mcp_tool.name,
-                description=mcp_tool.description or f"Tool: {mcp_tool.name}",
-                parameters=self._convert_schema(_tool_schema(mcp_tool))
-            )
-
-            function_declarations.append(function_decl)
-
-        if function_declarations:
-            return [genai_types.Tool(function_declarations=function_declarations)]
-
-        return []
-    
-    def _convert_schema(self, json_schema: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Convert JSON Schema to Gemini-compatible parameter format
-        
-        Handles complex schemas that Gemini 2.5-flash rejects:
-        - anyOf with const values -> enum
-        - oneOf with const values -> enum
-        - Removes unsupported JSON Schema keywords
-        - Preserves nested properties and arrays
-        
-        This fixes the "anyOf.0.const Extra inputs are not permitted" error
-        """
-        if not json_schema:
-            return {"type": "object", "properties": {}}
-        
-        def convert_property(prop_schema: Dict[str, Any]) -> Dict[str, Any]:
-            """Recursively convert a property schema to Gemini format"""
-            
-            # Handle anyOf with const values -> convert to enum
-            if "anyOf" in prop_schema:
-                const_values = []
-                prop_type = None
-                
-                for option in prop_schema["anyOf"]:
-                    if "const" in option:
-                        const_values.append(option["const"])
-                        # Infer type from const value
-                        if prop_type is None:
-                            if isinstance(option["const"], bool):
-                                prop_type = "boolean"
-                            elif isinstance(option["const"], int):
-                                prop_type = "integer"
-                            elif isinstance(option["const"], float):
-                                prop_type = "number"
-                            else:
-                                prop_type = "string"
-                
-                if const_values:
-                    # Convert anyOf[{const}] to enum
-                    return {
-                        "type": prop_type or prop_schema.get("type", "string"),
-                        "enum": const_values,
-                        "description": prop_schema.get("description", "")
-                    }
-            
-            # Handle oneOf similarly
-            if "oneOf" in prop_schema:
-                const_values = []
-                prop_type = None
-                
-                for option in prop_schema["oneOf"]:
-                    if "const" in option:
-                        const_values.append(option["const"])
-                        if prop_type is None:
-                            if isinstance(option["const"], bool):
-                                prop_type = "boolean"
-                            elif isinstance(option["const"], int):
-                                prop_type = "integer"
-                            elif isinstance(option["const"], float):
-                                prop_type = "number"
-                            else:
-                                prop_type = "string"
-                
-                if const_values:
-                    return {
-                        "type": prop_type or prop_schema.get("type", "string"),
-                        "enum": const_values,
-                        "description": prop_schema.get("description", "")
-                    }
-            
-            # Start with a clean schema
-            cleaned = {}
-            
-            # Copy only Gemini-supported keywords
-            # Gemini supports: type, description, enum, default, format, minimum, maximum, items, properties, required
-            safe_keywords = [
-                "type", "description", "enum", "default", "format",
-                "minimum", "maximum", "minLength", "maxLength"
-            ]
-            
-            for key in safe_keywords:
-                if key in prop_schema:
-                    cleaned[key] = prop_schema[key]
-            
-            # Default to string if no type specified
-            if "type" not in cleaned:
-                cleaned["type"] = "string"
-            
-            # Handle nested object properties
-            if "properties" in prop_schema:
-                cleaned["properties"] = {}
-                for prop_name, nested_schema in prop_schema["properties"].items():
-                    cleaned["properties"][prop_name] = convert_property(nested_schema)
-            
-            # Handle array items
-            if "items" in prop_schema:
-                if cleaned.get("type") == "array":
-                    cleaned["items"] = convert_property(prop_schema["items"])
-            
-            return cleaned
-        
-        # Convert root schema
-        converted = {
-            "type": json_schema.get("type", "object"),
-        }
-        
-        # Convert all properties
-        if "properties" in json_schema:
-            converted["properties"] = {}
-            for prop_name, prop_schema in json_schema["properties"].items():
-                try:
-                    converted["properties"][prop_name] = convert_property(prop_schema)
-                except Exception as e:
-                    logger.warning(f"Failed to convert property '{prop_name}': {e}")
-                    # Fallback to simple string type
-                    converted["properties"][prop_name] = {
-                        "type": "string",
-                        "description": prop_schema.get("description", f"Property: {prop_name}")
-                    }
-        
-        # Copy required fields
-        if "required" in json_schema:
-            converted["required"] = json_schema["required"]
-        
-        return converted
-    
-    def list_available_tools(self) -> List[str]:
-        """Get list of all available tool names"""
-        return list(self.tools.keys())
-    
     async def cleanup(self) -> None:
         """Clean up all server connections"""
         logger.info("Closing MCP server connections...")
