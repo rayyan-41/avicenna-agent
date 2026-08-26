@@ -3,11 +3,21 @@
 > Avicenna ships with **zero** MCP servers configured. That is deliberate.
 > This guide explains what MCP gives you and how to add servers yourself.
 
+> **Where the config lives.** MCP servers are configured in
+> `~/.avicenna/mcp_config.json` — a machine-level file, not a per-vault one.
+> `avicenna mcp path` prints it. A vault's `.agents/mcp.json` is scaffolded
+> for forward compatibility and is not read today.
+>
+> **What an agent may reach.** A server being configured does not put its
+> tools in front of every agent: an agent sees MCP tools only for the
+> servers named in the `mcp:` key of its own frontmatter.
+
 ## What MCP Gives You in Avicenna
 
 The Model Context Protocol (MCP) lets you connect external tool servers
-to Avicenna. Any agent can call those tools during a chat or a run,
-alongside the vault's own PowerShell tools and the built-ins.
+to Avicenna. An agent that has opted in through its `mcp:` frontmatter key can
+call those tools during a chat or a run, alongside the vault's own PowerShell
+tools and the built-ins — which are open to every agent.
 
 **Zero servers is a working state**, not an error. The MCP line in the
 welcome sequence will read "0 of 0 servers, 0 tools" — that means MCP is

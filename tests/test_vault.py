@@ -1,5 +1,7 @@
 """Vault layer tests."""
 
+from __future__ import annotations
+
 import tempfile
 from pathlib import Path
 
@@ -63,7 +65,11 @@ def test_init_then_load():
         vault = Vault.load(root)
         assert vault.protocol_text
         assert "scribe" in vault.agents
-        assert len(vault.tools.spec_for_model()) == 0  # no ps1 scripts
+        # No .ps1 scripts in a scaffolded vault, but the read-only builtins are
+        # registered by Vault.load so every entry point shares one tool surface.
+        names = {spec.name for spec in vault.tools.spec_for_model()}
+        assert names == {"read_note", "list_notes", "search_vault"}
+        assert not any(t.source.value == "vault_ps1" for t in vault.tools)
 
 
 def test_taxonomy_category_for_path():

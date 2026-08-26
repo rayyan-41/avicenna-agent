@@ -208,12 +208,22 @@ def route_request(vault: Vault, text: str) -> AgentDef | None:
         return None
 
     best = scores[0]
-    if best.score <= 0:
-        return None
 
-    # A vault with exactly one content agent has nothing to disambiguate.
+    # A vault with exactly one content agent has nothing to disambiguate, and
+    # that includes the case where the topic shares no vocabulary with it.
+    #
+    # This used to additionally require `best.score > 0`, which sounds harmless
+    # and was in fact a dead end for every new user. `avicenna init` scaffolds
+    # exactly one agent whose whole vocabulary is {general, purpose, content,
+    # agent, note, essay}; any real topic scores 0.00, fell through to the
+    # MIN_SCORE gate, and the run aborted with "cannot determine domain" before
+    # a single word was written. A refusal is only meaningful when there is
+    # something else the request might have meant.
     if len(scores) == 1:
         return best.agent
+
+    if best.score <= 0:
+        return None
 
     runner_up = scores[1].score
     if best.score < MIN_SCORE or (best.score - runner_up) < MIN_MARGIN:

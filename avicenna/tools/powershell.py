@@ -9,6 +9,7 @@ parsing. Lists are joined with commas first.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from pathlib import Path
 from collections.abc import Mapping
@@ -48,6 +49,18 @@ def build_argv(script: Path, params: Mapping[str, Any]) -> list[str]:
     return argv
 
 
+async def _terminate(proc: asyncio.subprocess.Process) -> None:
+    """Kill a child and reap it, so no zombie and no held pipes survive."""
+    if proc.returncode is not None:
+        return
+    try:
+        proc.kill()
+    except ProcessLookupError:  # already gone
+        return
+    with contextlib.suppress(Exception):
+        await proc.wait()
+
+
 class PowerShellTool(Tool):
     source = ToolSource.VAULT_PS1
 
@@ -69,15 +82,26 @@ class PowerShellTool(Tool):
         proc = await asyncio.create_subprocess_exec(
             *argv, cwd=str(self._cwd),
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            # DEVNULL, not inherit. The bridge's stdin *is* the NDJSON request
+            # channel: a vault script that reads stdin — Read-Host, a bare
+            # $input, any interactive prompt — would eat frames the bridge
+            # needed and then block forever waiting for input the user has no
+            # way to supply. The stdout invariant, enforced from the other side.
+            stdin=asyncio.subprocess.DEVNULL,
         )
         try:
             out, err = await asyncio.wait_for(proc.communicate(), timeout=self._timeout)
         except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
+            await _terminate(proc)
             return ToolResult(self.name, False, "", "", -1,
                               time.perf_counter() - started,
                               error=f"timeout after {self._timeout}s")
+        except asyncio.CancelledError:
+            # A cancelled run must not leave powershell.exe running with its
+            # pipes open. CancelledError used to propagate straight through
+            # here, orphaning one process per cancelled run.
+            await _terminate(proc)
+            raise
         stdout, stderr = out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
         code = proc.returncode or 0
         parsed = self._contract.parse(self.name, stdout, stderr, code) if self._contract else None

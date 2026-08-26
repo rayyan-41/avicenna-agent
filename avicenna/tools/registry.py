@@ -77,11 +77,39 @@ class ToolRegistry:
     def __iter__(self) -> Iterator[Tool]:
         return iter(dict.fromkeys(self._tools.values()))
 
-    def spec_for_model(self, *, allow: Iterable[str] | None = None) -> list[ToolSpec]:
+    def names_from(self, source: ToolSource) -> set[str]:
+        """Registry keys currently held by tools from `source`."""
+        return {key for key, tool in self._tools.items() if tool.source is source}
+
+    def spec_for_model(
+        self,
+        *,
+        allow: Iterable[str] | None = None,
+        deny: Iterable[str] | None = None,
+    ) -> list[ToolSpec]:
+        """The model-visible tool surface. The only registry-to-provider path.
+
+        Specs are named by their **registry key**, not by `tool.name`. When two
+        sources supply the same name the loser is kept under a
+        `{source}__{name}` alias, but its `.name` attribute is unchanged — so
+        naming specs after `.name` handed the model two entries with an
+        identical name, one of them unreachable, and strict providers reject a
+        duplicate outright. The key is what `get()` resolves, so the key is what
+        the model must be told.
+        """
         allowed = set(allow) if allow is not None else None
-        return [
-            ToolSpec(name=tool.name, description=tool.description, parameters=dict(tool.parameters))
-            for tool in self._tools.values()
-            if tool.access is ToolAccess.MODEL_CALLABLE
-            and (allowed is None or tool.name in allowed)
-        ]
+        denied = set(deny) if deny is not None else set()
+        specs: list[ToolSpec] = []
+        for key, tool in self._tools.items():
+            if tool.access is not ToolAccess.MODEL_CALLABLE:
+                continue
+            if key in denied:
+                continue
+            if allowed is not None and key not in allowed:
+                continue
+            specs.append(ToolSpec(
+                name=key,
+                description=tool.description,
+                parameters=dict(tool.parameters),
+            ))
+        return specs

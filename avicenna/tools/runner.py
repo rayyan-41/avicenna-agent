@@ -1,33 +1,23 @@
-"""ToolRunner protocol and MCPToolRunner adapter.
+"""The ToolRunner protocol.
 
-Session uses this protocol so it never imports MCP directly.
+Session depends on this rather than on any concrete registry, so it never
+imports MCP — or PowerShell, or anything else that knows how a tool actually
+runs. `ToolRegistry.runner` is the implementation the pipeline uses.
+
+An `MCPToolRunner` adapter used to live here as well. It was dead: MCP tools go
+into the same `ToolRegistry` as everything else (see `tools/mcp_tools.py`), so
+there is nothing for a second, MCP-only runner to do, and routing MCP calls
+around the registry would have skipped the access gating the registry enforces.
 """
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Any, Protocol
 
 from avicenna.providers.base import ToolSpec
 
 
 class ToolRunner(Protocol):
-    async def call(self, name: str, args: dict) -> str: ...
+    async def call(self, name: str, args: dict[str, Any]) -> str: ...
     def source_of(self, name: str) -> str: ...
     def specs(self) -> list[ToolSpec]: ...
-
-
-class MCPToolRunner:
-    """Adapts MCPClientManager to the ToolRunner protocol."""
-
-    def __init__(self, manager):
-        from avicenna.mcp.mcp_client import MCPClientManager
-        self._manager: MCPClientManager = manager
-
-    async def call(self, name: str, args: dict) -> str:
-        return await self._manager.call_tool(name, args)
-
-    def source_of(self, name: str) -> str:
-        return "mcp"
-
-    def specs(self) -> list[ToolSpec]:
-        return self._manager.tool_specs()

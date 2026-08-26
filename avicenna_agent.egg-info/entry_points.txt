@@ -1,2 +1,0 @@
-[console_scripts]
-avicenna = avicenna.cli.app:main

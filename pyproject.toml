@@ -4,31 +4,34 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "avicenna-agent"
-version = "1.0.0"
-description = "Avicenna: TUI Note-Generation Harness for Obsidian Vaults"
+version = "2.0.0"
+description = "Avicenna: agent harness for Obsidian vaults, with a TypeScript TUI frontend"
 requires-python = ">=3.10"
 dependencies = [
     "python-dotenv>=1.0.0",
     "typer>=0.9.0",
     "rich>=13.0.0",
     "mistralai>=1.0.0",
-    "textual>=0.79,<1.0",
     "mcp>=1.0.0",
     "pyyaml>=6.0",
+    # Imported by avicenna/secrets.py. It was undeclared, and because the
+    # import sits behind a try/except the failure was invisible: a clean
+    # install silently fell back to storing the API key in plain JSON while
+    # the README promised the OS keyring.
+    "keyring>=24.0",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-asyncio", "mypy"]
-gemini = ["google-genai>=0.3.0"]
+# The `gemini` extra is gone with the code that used it. It existed solely for
+# MCPClientManager.get_gemini_tools, which had no callers and imported a vendor
+# SDK outside avicenna/providers/ — a boundary the provider layer exists to hold.
 
 [project.scripts]
 avicenna = "avicenna.cli.app:main"
 
 [tool.setuptools.packages.find]
 include = ["avicenna*"]
-
-[tool.setuptools.package-data]
-avicenna = ["tui/*.tcss"]
 
 [tool.pytest.ini_options]
 # pytest-asyncio 1.x needs this or bare `async def test_` silently never runs.

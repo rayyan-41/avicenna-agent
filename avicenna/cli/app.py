@@ -1,11 +1,13 @@
 """Console entry point — Typer CLI with init, note, run-prompt, mcp subcommands.
 
-With no arguments, launches the TUI. Pass --no-tui for headless mode.
+With no arguments, launches the TypeScript interface in tui/. Pass --no-tui
+for headless mode.
 """
 
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -38,12 +40,14 @@ def main_callback(
     vault: Optional[Path] = typer.Option(None, "--vault", help="Path to Obsidian vault"),
     no_tui: bool = typer.Option(False, "--no-tui", help="Run in headless mode"),
     reconfigure: bool = typer.Option(False, "--reconfigure", help="Force re-onboarding"),
+    ascii_only: bool = typer.Option(
+        False, "--ascii", help="Restrict output to ASCII, for legacy consoles"),
 ) -> None:
     if ctx.invoked_subcommand is None:
         if no_tui:
             _headless_launch(vault)
         else:
-            _tui_launch(vault, reconfigure)
+            _tui_launch(vault, reconfigure, ascii_only)
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +149,17 @@ def note_cmd(
     typer.echo("Done.")
 
 
+@app.command("bridge", hidden=True)
+def bridge_cmd(
+    vault: Optional[Path] = typer.Option(None, "--vault"),
+) -> None:
+    """Run the stdio bridge the interface speaks to. For debugging."""
+    from avicenna.bridge.server import main as bridge_main
+
+    args = ["--vault", str(vault)] if vault else []
+    raise typer.Exit(bridge_main(args))
+
+
 @app.command("run-prompt")
 def run_prompt_cmd(
     file: Path = typer.Argument(..., help="Path to prompt file"),
@@ -221,44 +236,70 @@ def mcp_tools() -> None:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _tui_launch(vault_path: Path | None, reconfigure: bool) -> None:
-    from avicenna.bus import EventBus
-    from avicenna.config import Config
-    from avicenna.secrets import read_api_key
-    from avicenna.tui.app import AvicennaApp
-    from avicenna.vault.context import VaultContext
-    from avicenna.vault.vault import Vault
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+TUI_ENTRY = PROJECT_ROOT / "tui" / "dist" / "main.js"
 
-    ctx = VaultContext.detect(explicit=vault_path)
-    if not ctx.found:
+
+def _find_node() -> str | None:
+    """Node, from the environment or PATH."""
+    import shutil
+
+    override = os.environ.get("AVICENNA_NODE")
+    if override:
+        return override
+    return shutil.which("node")
+
+
+def _tui_launch(vault_path: Path | None, reconfigure: bool,
+                ascii_only: bool = False) -> None:
+    """Hand the terminal to the TypeScript frontend.
+
+    The frontend starts its own backend over `python -m avicenna.bridge`, so
+    this function only resolves the runtime and gets out of the way. Vault
+    detection deliberately happens in the frontend too: it can offer to
+    scaffold one, which an early exit here would prevent.
+    """
+    import subprocess
+
+    node = _find_node()
+    if node is None:
         typer.echo(
-            "No vault found here.\n"
-            "  - run `avicenna init <path>` to scaffold one, or\n"
-            "  - pass --vault <path>, or\n"
-            "  - cd into a vault (a folder with AGENTS.md and .agents/)",
+            "Avicenna's interface needs Node.js 18 or newer, which was not found.\n"
+            "  - install it from https://nodejs.org, or\n"
+            "  - point at it with AVICENNA_NODE=/path/to/node\n"
+            "  - or run headless: avicenna note \"<topic>\"",
             err=True,
         )
         raise typer.Exit(1)
 
-    bound_vault = Vault.load(ctx.root)
-    typer.echo(f"[{ctx.badge}] {ctx.summary}")
+    if not TUI_ENTRY.is_file():
+        typer.echo(
+            f"The interface has not been built yet ({TUI_ENTRY} is missing).\n"
+            f"  cd {PROJECT_ROOT / 'tui'}\n"
+            "  npm install && npm run build",
+            err=True,
+        )
+        raise typer.Exit(1)
 
-    # Onboarding is driven by the TUI itself. Passing provider=None is what
-    # triggers it, so --reconfigure simply withholds the stored key.
-    provider = None
-    if not reconfigure:
-        key = read_api_key()
-        if key:
-            from avicenna.providers.registry import get_provider
-            provider = get_provider(
-                "mistral", api_key=key,
-                model=Config.load_user_config().get("model", Config.MISTRAL_MODEL),
-            )
+    argv = [node, str(TUI_ENTRY), "--python", sys.executable, "--cwd", str(Path.cwd())]
+    if vault_path is not None:
+        argv += ["--vault", str(vault_path)]
+    # Forwarded rather than dropped. The frontend has parsed --ascii all along,
+    # but the launcher never passed it and the CLI rejected it outright, so the
+    # flag the README documents was unreachable through the `avicenna` command.
+    if ascii_only:
+        argv += ["--ascii"]
 
-    app = AvicennaApp(
-        vault=bound_vault, bus=EventBus(), provider=provider, context=ctx
-    )
-    app.run()
+    env = dict(os.environ)
+    if reconfigure:
+        # The frontend owns onboarding; this is how the CLI asks for it.
+        env["AVICENNA_FORCE_ONBOARD"] = "1"
+
+    try:
+        completed = subprocess.run(argv, env=env)
+    except KeyboardInterrupt:
+        raise typer.Exit(130)
+    raise typer.Exit(completed.returncode)
 
 
 def _headless_launch(vault_path: Path | None) -> None:

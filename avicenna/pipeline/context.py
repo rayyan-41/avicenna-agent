@@ -14,8 +14,8 @@ from typing import Any, TypeVar
 from avicenna.bus import EventBus
 from avicenna.events import Event
 from avicenna.providers.base import LLMProvider
-from avicenna.vault.vault import Vault  # noqa: F401
-from avicenna.vault.models import AgentDef  # noqa: F401
+from avicenna.vault.vault import Vault
+from avicenna.vault.models import AgentDef
 
 E = TypeVar("E", bound=Event)
 
@@ -25,7 +25,10 @@ class RunSpec:
     """Immutable inputs to one generation run."""
 
     topic: str
-    vault: Any  # Vault
+    # Concretely typed. These were `Any`, which silently switched off checking
+    # for every `spec.vault.…` and `ctx.agent.…` access in the pipeline — the
+    # bulk of the code that touches the vault.
+    vault: Vault
     provider: LLMProvider
     bus: EventBus
     run_id: str
@@ -42,7 +45,7 @@ class RunContext:
     """Mutable state accumulated as stages execute."""
 
     spec: RunSpec
-    agent: Any | None = None  # AgentDef
+    agent: AgentDef | None = None
     domain: str | None = None
     template: str | None = None
     slug: str | None = None
@@ -57,6 +60,14 @@ class RunContext:
     stages_completed: list[str] = field(default_factory=list)
     total_words: int = 0
     started_at: float = field(default_factory=time.time)
+    #: False when the finished note came in under its template's word floor.
+    #: The run still completes — a short note is worth keeping — but the
+    #: summary says so rather than reporting an unqualified success.
+    wordcount_ok: bool = True
+    #: True once ResumeStage has rehydrated slug/headings from a manifest.
+    #: Pre-flight keys off this to avoid re-declaring a structure that already
+    #: has chunks on disk under a slug it would not mint again.
+    resumed_from_manifest: bool = False
 
     @property
     def tmp_dir(self) -> Path:

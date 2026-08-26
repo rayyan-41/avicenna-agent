@@ -1,6 +1,11 @@
-"""Functional verification of agent chat and command dispatcher."""
+"""Functional verification of agent chat and the slash-command catalogue.
 
-import asyncio
+The dispatcher itself now lives in the TypeScript interface; what stays
+testable here is the safety boundary it depends on -- chat turns must only
+ever see read-only tools.
+"""
+
+from __future__ import annotations
 
 import pytest
 
@@ -8,41 +13,13 @@ from avicenna.bus import EventBus
 from avicenna.providers.base import Completion, Message
 from avicenna.providers.fake import FakeProvider
 from avicenna.tools.registry import ToolRegistry
-from avicenna.tui.commands import CommandDispatcher
 from avicenna.vault.models import AgentDef
-
-
-def test_command_dispatcher_detection():
-    d = CommandDispatcher()
-    assert d.is_command("/agent")
-    assert d.is_command("/help")
-    assert d.is_command("/note")
-    assert not d.is_command("hello")
-    assert not d.is_command("slashed/but_not_command")
-
-
-@pytest.mark.asyncio
-async def test_command_dispatcher_dispatch():
-    d = CommandDispatcher()
-    results: list[str] = []
-
-    async def handler(args):
-        results.append(f"called:{args}")
-
-    d.register("test", handler)
-    handled = await d.dispatch("/test arg1 arg2")
-    assert handled
-    assert results == ["called:['arg1', 'arg2']"]
-
-    # Unknown command falls through
-    handled = await d.dispatch("/unknown")
-    assert not handled
 
 
 @pytest.mark.asyncio
 async def test_agent_chat_controller_tools_safe():
     """Verify tool filtering excludes pipeline-only tools from chat."""
-    from avicenna.tui.agent_chat import AgentChatController, CHAT_SAFE_TOOLS
+    from avicenna.chat import AgentChatController, CHAT_SAFE_TOOLS
     from pathlib import Path
 
     bus = EventBus()
@@ -88,7 +65,7 @@ async def test_agent_chat_controller_tools_safe():
 @pytest.mark.asyncio
 async def test_onboarding_validation_error_mapping():
     """Verify onboarding validate_key maps errors to messages."""
-    from avicenna.tui.screens.onboarding import (
+    from avicenna.auth import (
         ValidationResult, LOCAL_MODEL_STUB_MESSAGE, validate_key,
     )
     from avicenna.providers.errors import AuthError

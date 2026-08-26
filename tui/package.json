@@ -1,0 +1,26 @@
+{
+  "name": "avicenna-tui",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Terminal frontend for the Avicenna agent harness",
+  "type": "module",
+  "bin": {
+    "avicenna-tui": "./dist/main.js"
+  },
+  "main": "./dist/main.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "watch": "tsc -p tsconfig.json --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test \"test/*.test.mjs\"",
+    "start": "node dist/main.js",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}

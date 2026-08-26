@@ -1,5 +1,12 @@
 name: CI
 
+# Every check here blocks. There is deliberately no `continue-on-error` in this
+# file: two of these gates once carried one "temporarily", and the result was a
+# green tick sitting on top of 17 type errors and a violated invariant for
+# weeks. A check that cannot fail the build is documentation, not a gate — if
+# something genuinely cannot be enforced yet, delete the step rather than
+# leaving a check that lies.
+
 on:
   push:
     branches: [master, harness]
@@ -28,28 +35,27 @@ jobs:
       - name: Tests
         run: pytest -q
 
-      # TODO: drop continue-on-error once the current typing cleanup lands, at
-      # which point a --strict regression should block the merge.
       - name: Type check (strict)
-        continue-on-error: true
         run: mypy --strict avicenna/providers avicenna/pipeline
 
-      # A blocking call inside a Textual message handler freezes the whole UI —
-      # the single biggest cause of the TUI feeling unresponsive. Anything under
-      # avicenna/tui must use the async equivalent (asyncio.sleep,
-      # asyncio.create_subprocess_exec, run_worker/run_in_executor, an async
-      # HTTP client). Comments are stripped before matching, and the patterns
-      # are anchored to the module name so asyncio.sleep is never flagged.
-      - name: Lint TUI for blocking calls
+      # A blocking call inside the bridge stalls the event pump, which freezes
+      # the interface just as surely as the old in-process TUI froze: the
+      # frontend is waiting on frames that the backend has stopped writing.
+      # Anything under avicenna/bridge must use the async equivalent
+      # (asyncio.sleep, asyncio.to_thread, asyncio.create_subprocess_exec, an
+      # async HTTP client). Comments are stripped before matching, and the
+      # patterns are anchored to the module name so asyncio.sleep is never
+      # flagged.
+      - name: Lint bridge for blocking calls
         shell: pwsh
         run: |
-          $root = "avicenna/tui"
+          $root = "avicenna/bridge"
           if (-not (Test-Path -LiteralPath $root)) {
-            Write-Host "No $root directory - nothing to lint."
-            exit 0
+            Write-Host "::error::$root is missing - the bridge lint cannot run."
+            exit 1
           }
 
-          $pattern = '\b(subprocess\.run|time\.sleep|requests\.)'
+          $pattern = '\b(subprocess\.run|subprocess\.check_|subprocess\.call|time\.sleep|requests\.|urllib\.request|\.communicate\(\)(?!\s*,\s*timeout))'
           $violations = @()
 
           Get-ChildItem -LiteralPath $root -Recurse -File -Filter *.py | ForEach-Object {
@@ -74,11 +80,170 @@ jobs:
           }
 
           Write-Host "No blocking calls found under $root."
-          exit 0
 
-      # TODO: drop continue-on-error once the vendor-neutrality fix lands.
-      # Importing avicenna.providers must not drag a specific vendor SDK into
-      # sys.modules; provider imports belong behind the registry, at the edge.
-      - name: Vendor leak check
-        continue-on-error: true
-        run: python -c "import sys; import avicenna.providers; sys.exit(1 if 'mistralai' in sys.modules else 0)"
+      # Importing avicenna.providers must not drag a vendor SDK into
+      # sys.modules; concrete backends resolve lazily through the registry.
+      - name: Vendor neutrality
+        run: |
+          python -c "import sys, avicenna.providers; leaked=[m for m in sys.modules if m.split('.')[0] in ('mistralai','openai','anthropic','google')]; print('leaked:', leaked); sys.exit(1 if leaked else 0)"
+
+      # No vendor SDK may be imported outside avicenna/providers/. The provider
+      # layer is the only place allowed to know which vendor is in use; a
+      # `from google.genai import ...` once sat in avicenna/mcp/ for months.
+      - name: Vendor SDK containment
+        shell: pwsh
+        run: |
+          $hits = Get-ChildItem -LiteralPath "avicenna" -Recurse -File -Filter *.py |
+            Where-Object { $_.FullName -notmatch '[\\/]providers[\\/]' } |
+            Select-String -Pattern '^\s*(from|import)\s+(mistralai|openai|anthropic|google\.genai)\b'
+          if ($hits) {
+            Write-Host "::error::Vendor SDK imported outside avicenna/providers/."
+            $hits | ForEach-Object { Write-Host ("  {0}:{1}: {2}" -f $_.Path, $_.LineNumber, $_.Line.Trim()) }
+            exit 1
+          }
+          Write-Host "No vendor SDK imports outside avicenna/providers/."
+
+      # The reference vault's name is one developer's directory. It must not be
+      # baked into the harness, in code or in docstrings.
+      - name: No reference-vault name outside tests
+        shell: pwsh
+        run: |
+          $hits = Get-ChildItem -Path "avicenna" -Recurse -File -Include *.py |
+            Select-String -Pattern 'De Anima'
+          if ($hits) {
+            Write-Host "::error::'De Anima' must not appear outside tests/."
+            $hits | ForEach-Object { Write-Host ("  {0}:{1}" -f $_.Path, $_.LineNumber) }
+            exit 1
+          }
+          Write-Host "No reference-vault name in avicenna/."
+
+      # AGENTS.md requires `from __future__ import annotations` in every module.
+      - name: Future annotations everywhere
+        shell: pwsh
+        run: |
+          $missing = Get-ChildItem -LiteralPath "avicenna" -Recurse -File -Filter *.py |
+            Where-Object { -not (Select-String -LiteralPath $_.FullName -Pattern '^from __future__ import annotations' -Quiet) }
+          if ($missing) {
+            Write-Host "::error::Missing 'from __future__ import annotations'."
+            $missing | ForEach-Object { Write-Host ("  {0}" -f $_.FullName) }
+            exit 1
+          }
+          Write-Host "All modules declare future annotations."
+
+      # stdout belongs to the NDJSON protocol. A bare print() anywhere the
+      # bridge can reach desyncs the frontend's parser.
+      - name: No stray prints to stdout
+        shell: pwsh
+        run: |
+          $hits = Get-ChildItem -LiteralPath "avicenna" -Recurse -File -Filter *.py |
+            Where-Object { $_.FullName -notmatch '[\\/]cli[\\/]' } |
+            Select-String -Pattern '^\s*print\(' |
+            Where-Object { $_.Line -notmatch 'file\s*=\s*sys\.stderr' }
+          if ($hits) {
+            Write-Host "::error::print() to stdout outside avicenna/cli/ - use stderr."
+            $hits | ForEach-Object { Write-Host ("  {0}:{1}: {2}" -f $_.Path, $_.LineNumber, $_.Line.Trim()) }
+            exit 1
+          }
+          Write-Host "No stray prints."
+
+      # The wire protocol has two halves in two languages. They drift silently
+      # unless something compares them.
+      - name: Protocol parity (events.py vs protocol.ts)
+        run: python scripts/check_protocol_parity.py
+
+      # A end-to-end smoke test of the actual binary contract: the bridge must
+      # answer NDJSON on stdout and nothing else.
+      - name: Bridge smoke test
+        shell: pwsh
+        run: |
+          $out = '{"type":"req","id":"1","method":"vault.info","params":{}}' | python -m avicenna.bridge 2>$null
+          $lines = $out -split "`n" | Where-Object { $_.Trim() }
+          foreach ($line in $lines) {
+            try { $null = $line | ConvertFrom-Json }
+            catch {
+              Write-Host "::error::Non-JSON line on the wire: $line"
+              exit 1
+            }
+          }
+          if ($lines.Count -lt 2) {
+            Write-Host "::error::Expected a ready frame and a response; got $($lines.Count) line(s)."
+            exit 1
+          }
+          Write-Host "Bridge answered $($lines.Count) well-formed frames."
+
+  # The interface is a separate toolchain, so it gets a separate job rather
+  # than bolting Node onto the Python one.
+  tui:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: tui/package-lock.json
+
+      - name: Install
+        working-directory: tui
+        run: npm ci
+
+      - name: Type check
+        working-directory: tui
+        run: npm run typecheck
+
+      - name: Build
+        working-directory: tui
+        run: npm run build
+
+      # This step did not exist. `npm test` was documented in three places and
+      # run by nothing, so the frontend suite could rot without anyone noticing.
+      - name: Tests
+        working-directory: tui
+        run: npm test
+
+      # The skeleton is unstyled on purpose. Reintroducing a palette should be
+      # a deliberate design pass, not something that creeps back in a patch.
+      - name: Frontend stays unstyled
+        run: |
+          if grep -rnE "\\\\x1b\\[[0-9;]*m|\\\\u001b\\[[0-9;]*m" tui/src --include=*.ts \
+               | grep -v "ansi.ts" ; then
+            echo "::error::Raw SGR escape outside ansi.ts - style through ansi.ts or not at all."
+            exit 1
+          fi
+          echo "No raw colour escapes outside ansi.ts."
+
+  # Line endings and encodings are a stated invariant, and .gitattributes only
+  # enforces them for people who cloned after it existed.
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: UTF-8 without BOM, LF endings
+        run: |
+          status=0
+          while IFS= read -r f; do
+            case "$f" in *.ps1) continue;; esac
+            if head -c 3 "$f" | grep -q $'\xef\xbb\xbf'; then
+              echo "::error file=$f::UTF-8 BOM"
+              status=1
+            fi
+            if grep -qU $'\r' "$f"; then
+              echo "::error file=$f::CRLF line endings"
+              status=1
+            fi
+          done < <(git ls-files '*.py' '*.ts' '*.md' '*.json' '*.yml')
+          exit $status
+
+      - name: requirements.txt stays deleted
+        run: |
+          if [ -f requirements.txt ]; then
+            echo "::error::pyproject.toml is the only dependency manifest."
+            exit 1
+          fi
+          echo "No requirements.txt."

@@ -1,32 +1,32 @@
 """First-run onboarding and vault-context tests.
 
-The v1.0.0 TUI opened straight to a chat pane with no provider, so any prompt
-returned "No vault or provider configured". These tests exist so that cannot
-regress silently: onboarding must appear on first run, the local-model option
-must not proceed, and a validated key must configure the app.
+The v1.0.0 frontend opened straight to a chat pane with no provider, so any
+prompt returned "No vault or provider configured". Onboarding now lives in the
+TypeScript interface, but the guarantees it depends on are backend ones, and
+these tests pin them:
 
-`validate_key` is stubbed throughout. These cover the screen flow, not the
-network, and the real keyring / user_config are never touched.
+  * a fresh install reports itself unconfigured, which is what makes the
+    interface show onboarding at all;
+  * a bad key produces a specific, actionable message and is never persisted;
+  * a good key is persisted and flips the install to onboarded;
+  * the local-model option stays an honest stub rather than a silent no-op.
+
+The real keyring and ~/.avicenna are never touched.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from avicenna.bus import EventBus
-from avicenna.tui.app import AvicennaApp
-from avicenna.tui.screens import onboarding as ob
-from avicenna.tui.screens.onboarding import (
-    ApiKeyScreen,
-    LocalModelStubScreen,
-    ProviderSelectScreen,
-    ValidationResult,
-)
+from avicenna import auth
+from avicenna.bridge.server import Bridge, BridgeError
 from avicenna.vault.context import VaultContext
 from avicenna.vault.vault import Vault
+
 
 def _vault(tmp_path: Path) -> Vault:
     (tmp_path / ".agents" / "agents").mkdir(parents=True)
@@ -48,117 +48,230 @@ def _vault(tmp_path: Path) -> Vault:
 
 
 @pytest.fixture
-def app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AvicennaApp:
-    # Never touch the real keyring or ~/.avicenna from a test.
+def isolated_config(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """An in-memory stand-in for user_config.json and the OS keyring."""
+    store: dict[str, Any] = {}
+    written: dict[str, str] = {}
+
     import avicenna.secrets as secrets
     from avicenna.config import Config
 
-    monkeypatch.setattr(secrets, "write_api_key", lambda provider, key: "test-store")
-    monkeypatch.setattr(Config, "save_user_config", staticmethod(lambda cfg: None))
-    monkeypatch.setattr(Config, "load_user_config", staticmethod(dict))
+    monkeypatch.setattr(Config, "load_user_config", staticmethod(lambda: dict(store)))
+    monkeypatch.setattr(
+        Config, "save_user_config", staticmethod(lambda cfg: store.update(cfg))
+    )
 
-    v = _vault(tmp_path)
-    ctx = VaultContext.detect(cwd=tmp_path)
-    return AvicennaApp(vault=v, bus=EventBus(), provider=None, context=ctx)
+    def fake_write(provider: str, key: str) -> str:
+        written[provider] = key
+        return "test-store"
 
-
-async def test_onboarding_appears_on_first_run(app: AvicennaApp) -> None:
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        assert isinstance(app.screen, ProviderSelectScreen)
-        ids = {b.id for b in app.screen.query("Button")}
-        assert {"pick-api", "pick-local"} <= ids
-        await pilot.press("ctrl+q")
+    monkeypatch.setattr(secrets, "write_api_key", fake_write)
+    monkeypatch.setattr(auth, "persist_key", auth.persist_key)  # keep the real one
+    store["_written"] = written
+    return store
 
 
-async def test_local_model_explains_and_does_not_proceed(app: AvicennaApp) -> None:
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        await pilot.click("#pick-local")
-        await pilot.pause()
-        assert isinstance(app.screen, LocalModelStubScreen)
+# ---------------------------------------------------------------------------
+# A fresh install must ask
+# ---------------------------------------------------------------------------
 
-        body = " ".join(str(w.renderable) for w in app.screen.query("Static"))
-        assert "tool calling" in body      # states the real reason
-        assert app._provider is None       # and never configures a provider
-
-        await pilot.click("#stub-back")
-        await pilot.pause()
-        assert isinstance(app.screen, ProviderSelectScreen)
-        await pilot.press("ctrl+q")
-
-
-async def test_api_key_field_is_masked_and_rejects_empty(app: AvicennaApp) -> None:
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        await pilot.click("#pick-api")
-        await pilot.pause()
-        assert isinstance(app.screen, ApiKeyScreen)
-        assert app.screen.query_one("#api-key-input").password is True
-
-        await pilot.press("enter")          # empty submit
-        await pilot.pause()
-        status = str(app.screen.query_one("#api-key-status").renderable)
-        assert "Enter a key" in status
-        assert app._provider is None
-        await pilot.press("ctrl+q")
-
-
-async def test_bad_key_shows_specific_error_and_clears_field(
-    app: AvicennaApp, monkeypatch: pytest.MonkeyPatch
+def test_fresh_install_reports_unconfigured(
+    monkeypatch: pytest.MonkeyPatch, isolated_config: dict[str, Any]
 ) -> None:
-    async def reject(*a: object, **k: object) -> ValidationResult:
-        return ValidationResult(False, "Key rejected. Check for a typo or an expired key.")
+    monkeypatch.setattr("avicenna.secrets.read_api_key", lambda provider="mistral": None)
 
-    monkeypatch.setattr(ob, "validate_key", reject)
+    status = auth.auth_status()
 
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        await pilot.click("#pick-api")
-        await pilot.pause()
-        app.screen.query_one("#api-key-input").value = "bad-key"
-        await pilot.press("enter")
-        for _ in range(8):
-            await pilot.pause()
-
-        status = str(app.screen.query_one("#api-key-status").renderable)
-        assert "rejected" in status.lower()
-        assert app.screen.query_one("#api-key-input").value == ""
-        assert app._provider is None
-        await pilot.press("ctrl+q")
+    assert status["configured"] is False
+    assert status["onboarded"] is False
+    # The interface reads these two fields to decide whether to open onboarding.
+    assert status["provider"] == auth.DEFAULT_PROVIDER
+    assert status["model"] == auth.DEFAULT_MODEL
 
 
-async def test_good_key_configures_provider_and_closes_onboarding(
-    app: AvicennaApp, monkeypatch: pytest.MonkeyPatch
+def test_unconfigured_install_has_no_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("avicenna.secrets.read_api_key", lambda provider="mistral": None)
+    assert auth.build_provider() is None
+
+
+# ---------------------------------------------------------------------------
+# Key validation maps failures to something a human can act on
+# ---------------------------------------------------------------------------
+
+class _RaisingProvider:
+    name = "mistral"
+
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    async def complete(self, **_: Any) -> Any:
+        raise self._exc
+
+    async def close(self) -> None:
+        return None
+
+
+def _provider_factory(exc: Exception | None):
+    def factory(*_args: Any, **_kwargs: Any) -> Any:
+        if exc is None:
+            class _Ok(_RaisingProvider):
+                async def complete(self, **_kw: Any) -> Any:
+                    return object()
+
+            return _Ok(RuntimeError("unused"))
+        return _RaisingProvider(exc)
+
+    return factory
+
+
+@pytest.mark.asyncio
+async def test_bad_key_reports_a_typo_not_a_stack_trace(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def accept(*a: object, **k: object) -> ValidationResult:
-        return ValidationResult(True, "Validated against mistral-large-latest.")
+    from avicenna.providers.errors import AuthError
 
-    monkeypatch.setattr(ob, "validate_key", accept)
+    monkeypatch.setattr(
+        "avicenna.providers.registry.get_provider", _provider_factory(AuthError("401"))
+    )
+    result = await auth.validate_key("mistral", "bad-key", "mistral-large-latest")
 
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        await pilot.click("#pick-api")
-        await pilot.pause()
-        app.screen.query_one("#api-key-input").value = "good-key"
-        await pilot.press("enter")
-        for _ in range(12):
-            await pilot.pause()
-
-        assert not isinstance(app.screen, (ApiKeyScreen, ProviderSelectScreen))
-        assert app._provider is not None
-        await pilot.press("ctrl+q")
+    assert result.ok is False
+    assert "typo" in result.detail.lower() or "rejected" in result.detail.lower()
 
 
-async def test_existing_provider_skips_onboarding(
+@pytest.mark.asyncio
+async def test_rate_limited_key_is_reported_as_working(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from avicenna.providers.errors import RateLimitError
+
+    monkeypatch.setattr(
+        "avicenna.providers.registry.get_provider",
+        _provider_factory(RateLimitError("429")),
+    )
+    result = await auth.validate_key("mistral", "k", "mistral-large-latest")
+
+    # A rate limit is not a bad key, and saying so avoids a pointless re-paste.
+    assert result.ok is False
+    assert "rate limited" in result.detail.lower()
+
+
+@pytest.mark.asyncio
+async def test_network_failure_is_distinguished_from_a_bad_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from avicenna.providers.errors import TransientError
+
+    monkeypatch.setattr(
+        "avicenna.providers.registry.get_provider",
+        _provider_factory(TransientError("connection reset")),
+    )
+    result = await auth.validate_key("mistral", "k", "mistral-large-latest")
+
+    assert result.ok is False
+    assert "network" in result.detail.lower()
+
+
+@pytest.mark.asyncio
+async def test_good_key_validates(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "avicenna.providers.registry.get_provider", _provider_factory(None)
+    )
+    result = await auth.validate_key("mistral", "good-key", "mistral-large-latest")
+
+    assert result.ok is True
+    assert "mistral-large-latest" in result.detail
+
+
+# ---------------------------------------------------------------------------
+# Persistence
+# ---------------------------------------------------------------------------
+
+def test_persisting_a_key_marks_the_install_onboarded(
+    isolated_config: dict[str, Any], tmp_path: Path
+) -> None:
+    store = auth.persist_key("good-key", vault_root=tmp_path)
+
+    assert store == "test-store"
+    assert isolated_config["onboarded"] is True
+    assert isolated_config["provider"] == auth.DEFAULT_PROVIDER
+    assert isolated_config["model"] == auth.DEFAULT_MODEL
+    assert isolated_config["default_vault"] == str(tmp_path)
+    assert isolated_config["_written"]["mistral"] == "good-key"
+
+
+@pytest.mark.asyncio
+async def test_validation_alone_never_persists(
+    monkeypatch: pytest.MonkeyPatch, isolated_config: dict[str, Any]
+) -> None:
+    from avicenna.providers.errors import AuthError
+
+    monkeypatch.setattr(
+        "avicenna.providers.registry.get_provider", _provider_factory(AuthError("401"))
+    )
+    bridge = Bridge()
+    result = await bridge._dispatch("auth.validate", {"key": "bad-key"})
+
+    assert result["ok"] is False
+    # A rejected key must leave no trace behind.
+    assert "onboarded" not in isolated_config
+    assert isolated_config["_written"] == {}
+
+
+@pytest.mark.asyncio
+async def test_empty_key_is_refused_before_any_network_call() -> None:
+    bridge = Bridge()
+    with pytest.raises(BridgeError, match="No key supplied"):
+        await bridge._dispatch("auth.validate", {"key": "   "})
+
+
+# ---------------------------------------------------------------------------
+# The local-model option stays honest
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_local_model_option_explains_itself_and_configures_nothing() -> None:
+    bridge = Bridge()
+    result = await bridge._dispatch("auth.local_stub", {})
+
+    message = result["message"]
+    assert len(message) > 100
+    assert "planned for a future release" in message
+    # It names the actual blocker rather than "coming soon".
+    assert "tool call" in message
+
+
+# ---------------------------------------------------------------------------
+# Vault context still drives what the interface can offer
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_vault_info_describes_a_bound_vault(tmp_path: Path) -> None:
+    _vault(tmp_path)
+    bridge = Bridge(str(tmp_path))
+    info = await bridge._dispatch("vault.info", {})
+
+    assert info["found"] is True
+    assert info["root"] == str(tmp_path.resolve())
+    assert info["agentCount"] == 1
+    assert "general" in info["domains"]
+
+
+@pytest.mark.asyncio
+async def test_missing_vault_is_a_reportable_state_not_a_crash(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from avicenna.providers.fake import FakeProvider
+    empty = tmp_path / "not-a-vault"
+    empty.mkdir()
+    monkeypatch.setattr(
+        VaultContext, "detect",
+        classmethod(lambda cls, explicit=None, cwd=None: cls(empty, None, "none", False, None)),
+    )
+    bridge = Bridge()
+    info = await bridge._dispatch("vault.info", {})
 
-    v = _vault(tmp_path)
-    ctx = VaultContext.detect(cwd=tmp_path)
-    a = AvicennaApp(vault=v, bus=EventBus(), provider=FakeProvider(), context=ctx)
-    async with a.run_test() as pilot:
-        await pilot.pause()
-        assert not isinstance(a.screen, (ProviderSelectScreen, ApiKeyScreen))
-        await pilot.press("ctrl+q")
+    assert info["found"] is False
+    assert info["badge"] == "NO VAULT"
+    # Asking for a run without a vault must explain, not raise a traceback.
+    with pytest.raises(BridgeError, match="No vault found"):
+        await bridge._dispatch("run.note", {"topic": "anything"})
