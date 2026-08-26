@@ -5,9 +5,9 @@ vault changes what the harness can do and where notes land, so that fact is
 resolved once, explicitly, and surfaced to the user rather than inferred
 silently at each call site.
 
-Running inside `E:\\De Anima\\History\\Biographies` should not just find the
-vault; it should understand that the caller is standing in the `biography`
-category of the `history` domain, and use that as a placement hint.
+Running inside `<vault>/History/Biographies` should not just find the vault; it
+should understand that the caller is standing in the `biography` category of
+the `history` domain, and use that as a placement hint.
 """
 
 from __future__ import annotations

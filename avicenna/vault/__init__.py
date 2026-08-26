@@ -1,5 +1,7 @@
 """Vault module — binding, discovery, models, routing, and init scaffold."""
 
+from __future__ import annotations
+
 from avicenna.vault.discovery import VaultNotFound, discover_vault
 from avicenna.vault.models import AgentDef, Taxonomy, VaultConfigError
 from avicenna.vault.vault import Vault

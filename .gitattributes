@@ -1,0 +1,19 @@
+# Line endings are normalised here rather than left to each contributor's
+# core.autocrlf. AGENTS.md requires LF in every committed file; without this
+# file that guarantee rested entirely on local git configuration, and a clone
+# with autocrlf=false would have committed CRLF with nothing to catch it.
+* text=auto eol=lf
+
+# Binary: never touch these.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+
+# PowerShell on Windows is happiest with CRLF, and these are executed by
+# powershell.exe rather than read by Python.
+*.ps1 text eol=crlf

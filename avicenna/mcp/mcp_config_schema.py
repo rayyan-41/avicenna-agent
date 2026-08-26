@@ -5,6 +5,8 @@ Supports multiple server types:
 - Node.js packages via npx (type: "node")
 - Direct executables (type: "executable")
 """
+from __future__ import annotations
+
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 from pathlib import Path
