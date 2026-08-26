@@ -1,148 +1,127 @@
+"""Central configuration: env resolution, MCP config, user config.
+
+Three things about this module are deliberate, because each was a defect:
+
+* **Nothing here writes to stdout.** stdout belongs to the NDJSON wire
+  protocol. This module used to hold a module-level ``rich`` Console and print
+  through it from six places, including an import-time check that fired
+  whenever the legacy ``GOOGLE_API_KEY`` was unset — which, since the provider
+  is Mistral, is essentially always. The bridge redirects ``sys.stdout`` to
+  stderr and that contained it, but the containment was the only thing standing
+  between an ordinary import and a desynced frontend parser. Diagnostics go to
+  stderr through ``warn``.
+* **No import-time side effects.** Importing configuration should not emit,
+  prompt or decide anything.
+* **Every file operation names its encoding.** The default on Windows is
+  cp1252, so a vault path with a non-ASCII character raised
+  ``UnicodeEncodeError`` on save — which was then swallowed into a console
+  print, silently failing to persist the file that holds the API key.
+"""
+
+from __future__ import annotations
+
+import json
 import os
+import sys
 from pathlib import Path
 from typing import Any, cast
 
 from dotenv import load_dotenv
-from rich.console import Console
+
 from avicenna.mcp.mcp_config_schema import MCPConfiguration
 
-# Initialize Rich console for pretty error messages
-console = Console()
 
-# 1. Resolve the Project Root Directory
-# We use Path(__file__) to find *this* file's location, then go up 3 levels:
-# src/avicenna/config.py -> src/avicenna -> src -> ROOT
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
+def warn(message: str) -> None:
+    """Report a configuration problem on stderr, never stdout."""
+    print(f"avicenna: {message}", file=sys.stderr)
 
-# 2. Load Environment Variables
-# We explicitly point to the .env file in the root directory.
-# This ensures it works even if you run the script from a different folder.
+
+# The repository root: avicenna/config.py -> avicenna/ -> ROOT.
+#
+# This was `parent.parent.parent`, carried over from a `src/` layout that no
+# longer exists, so it resolved to the directory *above* the checkout and
+# `load_dotenv` looked for `.env` one level too high. The README tells users to
+# put their key in a project-root `.env`; that file was never read.
+BASE_DIR = Path(__file__).resolve().parent.parent
+
 env_path = BASE_DIR / ".env"
 load_dotenv(env_path)
 
+
 class Config:
+    """Central configuration.
+
+    All application settings should be accessed via this class, never by
+    calling os.getenv() directly in other files.
     """
-    Central configuration class.
-    All application settings should be accessed via this class,
-    never by calling os.getenv() directly in other files.
-    """
-    
-    # Legacy API Key (Google — kept as fallback so existing .env files don't break)
-    API_KEY: str | None = os.getenv("GOOGLE_API_KEY")
-    
-    # Mistral provider settings
+
     LLM_PROVIDER: str = os.getenv("AVICENNA_PROVIDER", "mistral")
-    MISTRAL_API_KEY: str | None = os.getenv("MISTRAL_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    MISTRAL_API_KEY: str | None = os.getenv("MISTRAL_API_KEY")
     MISTRAL_MODEL: str = os.getenv("MISTRAL_MODEL", "mistral-large-latest")
-    
-    # Legacy Model Name (kept as fallback)
-    MODEL_NAME: str = os.getenv("AVICENNA_MODEL", "gemini-2.0-flash")
-    
-    # Google OAuth credentials for workspace-mcp
-    GOOGLE_OAUTH_CLIENT_ID: str | None = os.getenv("GOOGLE_OAUTH_CLIENT_ID")
-    GOOGLE_OAUTH_CLIENT_SECRET: str | None = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET")
-    
-    # Brave Search API key for search MCP server
-    BRAVE_API_KEY: str | None = os.getenv("BRAVE_API_KEY")
-    
-    # GitHub Personal Access Token for GitHub MCP server
-    GITHUB_TOKEN: str | None = os.getenv("GITHUB_TOKEN")
-    
-    # User email for Google Workspace (optional override in .env)
-    GOOGLE_USER_EMAIL: str | None = os.getenv("GOOGLE_USER_EMAIL")
-    
-    # MCP Configuration
-    MCP_CONFIG_PATH = Path.home() / '.avicenna' / 'mcp_config.json'
-    USER_CONFIG_PATH = Path.home() / '.avicenna' / 'user_config.json'
-    
+
+    MCP_CONFIG_PATH = Path.home() / ".avicenna" / "mcp_config.json"
+    USER_CONFIG_PATH = Path.home() / ".avicenna" / "user_config.json"
+
     @classmethod
     def load_mcp_config(cls) -> MCPConfiguration:
-        """Load MCP configuration, creating default if needed"""
+        """Load MCP configuration, creating an empty default if absent."""
         if not cls.MCP_CONFIG_PATH.exists():
             config = MCPConfiguration.default()
-            config.save(cls.MCP_CONFIG_PATH)
-            console.print(f"[green]✅ Created default MCP config:[/green] {cls.MCP_CONFIG_PATH}")
+            try:
+                config.save(cls.MCP_CONFIG_PATH)
+            except OSError as exc:
+                warn(f"could not create {cls.MCP_CONFIG_PATH}: {exc}")
             return config
-        
+
         try:
             return MCPConfiguration.from_file(cls.MCP_CONFIG_PATH)
-        except Exception as e:
-            console.print(f"[yellow]⚠️ Error loading MCP config, using defaults:[/yellow] {e}")
+        except Exception as exc:  # noqa: BLE001 - malformed config is the user's
+            warn(f"could not read {cls.MCP_CONFIG_PATH} ({exc}); using defaults")
             return MCPConfiguration.default()
-    
+
     @classmethod
     def load_user_config(cls) -> dict[str, Any]:
-        """Load user configuration (email, preferences, etc.)"""
-        import json
-
+        """Load user configuration (provider, model, key location, vault)."""
         if not cls.USER_CONFIG_PATH.exists():
             return {}
-
         try:
-            with open(cls.USER_CONFIG_PATH, 'r') as f:
-                # json.load is typed Any; the file is written by save_user_config
-                # and is always a JSON object. cast rather than re-validate so
-                # behaviour is unchanged.
-                return cast(dict[str, Any], json.load(f))
-        except Exception as e:
-            console.print(f"[yellow]⚠️ Error loading user config:[/yellow] {e}")
+            raw = cls.USER_CONFIG_PATH.read_text(encoding="utf-8")
+            data = json.loads(raw)
+        except (OSError, json.JSONDecodeError) as exc:
+            warn(f"could not read {cls.USER_CONFIG_PATH}: {exc}")
             return {}
-    
+        if not isinstance(data, dict):
+            warn(f"{cls.USER_CONFIG_PATH} does not contain a JSON object; ignoring it")
+            return {}
+        return cast(dict[str, Any], data)
+
     @classmethod
     def save_user_config(cls, config: dict[str, Any]) -> None:
-        """Save user configuration"""
-        import json
-        
+        """Persist user configuration atomically.
+
+        Raises on failure. This file can hold an API key, and a silent failure
+        told the caller the key was stored when it was not.
+        """
         cls.USER_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        
+        tmp = cls.USER_CONFIG_PATH.with_suffix(".json.part")
+        tmp.write_text(
+            json.dumps(config, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+            newline="\n",
+        )
+        os.replace(tmp, cls.USER_CONFIG_PATH)
+        cls._restrict_permissions(cls.USER_CONFIG_PATH)
+
+    @staticmethod
+    def _restrict_permissions(path: Path) -> None:
+        """Best-effort owner-only permissions on a file that may hold a secret.
+
+        POSIX mode bits are meaningless on Windows, so this is genuinely
+        best-effort there and the caller must not present it as protection.
+        """
+        import stat
+
         try:
-            with open(cls.USER_CONFIG_PATH, 'w') as f:
-                json.dump(config, f, indent=2)
-        except Exception as e:
-            console.print(f"[red]✗ Error saving user config:[/red] {e}")
-    
-    @classmethod
-    def get_google_user_email(cls) -> str | None:
-        """
-        Get Google user email with smart fallback:
-        1. Check .env GOOGLE_USER_EMAIL (allows override)
-        2. Check user_config.json (saved from previous sessions)
-        3. Return None (will prompt user when needed)
-        """
-        # Priority 1: .env file (explicit override)
-        if cls.GOOGLE_USER_EMAIL:
-            return cls.GOOGLE_USER_EMAIL
-        
-        # Priority 2: User config (saved from previous session)
-        user_config = cls.load_user_config()
-        return cast("str | None", user_config.get('google_user_email'))
-
-    @classmethod
-    def set_google_user_email(cls, email: str) -> None:
-        """Save Google user email to user config"""
-        user_config = cls.load_user_config()
-        user_config['google_user_email'] = email
-        cls.save_user_config(user_config)
-        console.print(f"[green]✓ Saved Google email to user config[/green]")
-    
-    @classmethod
-    def validate(cls) -> bool:
-        """
-        Verifies that critical configuration is present.
-        Returns False if the API key is missing, stopping the app early.
-        """
-        if not cls.API_KEY:
-            console.print("[bold red]❌ CRITICAL ERROR: GOOGLE_API_KEY not found.[/bold red]")
-            console.print(f"[yellow]   Expected .env location:[/yellow] {env_path}")
-            console.print("[dim]   Please create the .env file with your API key.[/dim]")
-            return False
-        return True
-
-# 3. Import-time Check
-# This runs as soon as this file is imported anywhere.
-# It gives immediate feedback if the key is missing.
-if not Config.API_KEY:
-    try:
-        console.print("[yellow]Warning: Config loaded but API Key is missing.[/yellow]")
-    except UnicodeEncodeError:
-        pass
+            path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+        except OSError:
+            pass
