@@ -14,7 +14,7 @@
 <!-- map:files:start -->
 | File | Loc | Role |
 | --- | --- | --- |
-| `ci.yml` | 249 | The sole workflow file. Defines all three CI jobs and every enforcement gate. Runs on push/PR to `master` and `harness`. |
+| `ci.yml` | 265 | The sole workflow file. Defines all three CI jobs and every enforcement gate. Runs on push/PR to `master` and `harness`. |
 <!-- map:files:end -->
 
 ## Jobs and steps

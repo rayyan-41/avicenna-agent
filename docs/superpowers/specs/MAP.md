@@ -15,6 +15,7 @@
 <!-- map:files:start -->
 | File | Loc | Role |
 | --- | --- | --- |
+| `2026-09-06-backend-shippability-design.md` | 119 | Why the repo had fourteen blocking gates and no evidence: every one tested the code in isolation and none had ever run the product. Specifies the healthcheck surface (the bridge's seventeen methods, MCP servers, vault PowerShell tools and provider reachability are the endpoints, since there is no HTTP), the six-agent live generation matrix and why it runs against the real vault rather than `_tmp/`, the tag-triggered release workflow and why it carries no PyPI job, and two gate corrections. |
 | `2026-09-06-map-context-tree-design.md` | 119 | Why the MAP.md tree exists and what makes it trustworthy. Records the load-bearing decision — a drifted map is worse than no map, because it is believed — and the split into a machine-checked inventory and a hand-written judgment section that follows from it. Specifies the gate now implemented in `scripts/check_maps.py`. |
 <!-- map:files:end -->
 
