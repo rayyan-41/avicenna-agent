@@ -299,3 +299,44 @@ async def test_sibling_directory_is_not_inside_the_vault(tmp_path: Path) -> None
     (tmp_path / "vault-private").mkdir()
     with pytest.raises(ValueError):
         _safe_path(root, "../vault-private/secrets.md")
+
+
+async def test_headings_with_commas_are_accepted(tmp_path: Path) -> None:
+    """Headings containing commas must not abort the run.
+
+    The comma restriction used to live in pre-flight to protect the PowerShell
+    tool's delimiter encoding.  It killed legitimate academic headings like
+    "Causes, Course and Consequences".  The restriction was removed; commas are
+    now sanitised only at the PS1 boundary.
+    """
+    from avicenna.events import PreflightDeclared
+
+    comma_headings = [
+        "Causes, Course and Consequences",
+        "The Limits of Unaided Reason",
+    ]
+
+    def script(system: str, messages: list[Any]) -> Completion:
+        prompt = messages[-1].content if messages else ""
+        if "pre-flight plan" in prompt or "JSON fence" in prompt:
+            return Completion(text=_declaration(headings=comma_headings))
+        return _script(system, messages)
+
+    vault = _scaffold(tmp_path)
+    bus = EventBus()
+    queue = bus.subscribe()
+    await execute_run(TOPIC, FakeProvider(script=script), vault,
+                      bus=bus, concurrency=3)
+    await bus.close()
+
+    # Pre-flight must have accepted the comma-containing heading.
+    events: list[Event] = []
+    async for ev in drain(queue):
+        events.append(ev)
+    preflight = [e for e in events if isinstance(e, PreflightDeclared)]
+    assert len(preflight) == 1
+    assert "Causes, Course and Consequences" in preflight[0].headings
+
+    # The heading must survive through the entire pipeline into the note body.
+    body = _note(vault).read_text(encoding="utf-8")
+    assert "## Causes, Course and Consequences" in body

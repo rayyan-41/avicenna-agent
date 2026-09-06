@@ -108,9 +108,6 @@ def parse_preflight(
         raise PreflightError("pre-flight declared zero headings")
     if len(headings) > 40:
         raise PreflightError(f"pre-flight declared {len(headings)} headings, refusing")
-    if any("," in h for h in headings):
-        raise PreflightError("headings must not contain commas (write_manifest delimiter)")
-
     template = str(data.get("template") or "general").strip().lower()
     if template not in TEMPLATE_MINIMUMS:
         template = "general"

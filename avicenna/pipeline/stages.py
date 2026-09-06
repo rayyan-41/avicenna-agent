@@ -333,8 +333,16 @@ class ManifestStage(PipelineStage):
         assert ctx.slug is not None
         expected = len(ctx.headings)
         if ctx.spec.vault.tools.has("write_manifest"):
+            # The tool receives a lossy rendering of the headings: commas inside
+            # individual headings are replaced with semicolons because the
+            # PowerShell argument uses comma as a delimiter.  This is acceptable
+            # because the pipeline consumes only the chunk COUNT from the tool's
+            # return value (result.parsed.captures.get("chunks", ...)), not the
+            # heading text.  The real headings — in the Python manifest, chunk
+            # filenames, resume, and the note itself — keep their commas intact.
+            safe_headings = [h.replace(",", ";") for h in ctx.headings]
             result = await invoke_tool(ctx, "write_manifest",
-                Slug=ctx.slug, Headings=",".join(ctx.headings))
+                Slug=ctx.slug, Headings=",".join(safe_headings))
             if result.parsed is None or result.parsed.token != "MANIFEST_WRITTEN":
                 raise PipelineAbort("manifest",
                     f"write_manifest failed: {result.parsed.token if result.parsed else result.stderr}")
