@@ -14,7 +14,7 @@
 <!-- map:files:start -->
 | File | Loc | Role |
 | --- | --- | --- |
-| `2026-09-06-layered-configuration.md` | 618 | Eight tasks turning the hardcoded harness into a tunable engine: a `Settings` resolver with one precedence chain, a registry populated from the existing constants so they become defaults rather than values, a vault-scoped `.agents/config.json`, the provider and model resolution fix, the `avicenna config` command group, per-run flags on `note`, vault-derived probe topics, and vault-owned contract tokens and note placement. |
+| `2026-09-06-layered-configuration.md` | 631 | Eight tasks turning the hardcoded harness into a tunable engine: a `Settings` resolver with one precedence chain, a registry populated from the existing constants so they become defaults rather than values, a vault-scoped `.agents/config.json`, the provider and model resolution fix, the `avicenna config` command group, per-run flags on `note`, vault-derived probe topics, and vault-owned contract tokens and note placement. |
 <!-- map:files:end -->
 
 ## Invariants

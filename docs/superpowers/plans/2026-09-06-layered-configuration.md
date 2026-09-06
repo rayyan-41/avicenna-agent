@@ -123,6 +123,7 @@ def test_registry_covers_the_documented_keys():
         "max_tool_iterations", "provider_max_retries", "provider_base_delay_s",
         "routing_min_score", "routing_min_margin", "routing_weights",
         "routing_stopwords", "template_minimums", "no_moc_domains",
+        "max_headings",
     }
     assert expected <= set(REGISTRY)
 
@@ -130,7 +131,8 @@ def test_registry_covers_the_documented_keys():
 def test_vault_scoped_keys_are_marked_vault():
     from avicenna.settings import REGISTRY
     for key in ("template_minimums", "routing_weights", "routing_stopwords",
-                "no_moc_domains", "routing_min_score", "routing_min_margin"):
+                "no_moc_domains", "routing_min_score", "routing_min_margin",
+                "max_headings"):
         assert REGISTRY[key].scope == "vault", key
 
 
@@ -166,6 +168,11 @@ Add the remaining `SettingSpec` entries. Import the current constants as the def
 - `routing_weights` as a dict built from `W_DOMAIN`, `W_CATEGORY`, `W_THEME`, `W_ENTITY`, `W_DESCRIPTION`; `routing_min_score`, `routing_min_margin`, `routing_stopwords` from `avicenna.vault.routing`
 - `template_minimums` from `TEMPLATE_MINIMUMS` in `avicenna.pipeline.preflight`
 - `provider` and `model` from `DEFAULT_PROVIDER` and `DEFAULT_MODEL` in `avicenna.auth`
+- `max_headings`, default `40`, scope `vault`, taken from the literal currently
+  inlined in `preflight.py` as `if len(headings) > 40`. This one was found by
+  running the matrix: a smaller model declared sixty headings for a
+  thousand-word note and the run was refused by a number no user could change.
+  Replace that literal with a settings read in Task 6.
 
 Perform these imports lazily inside a builder function if a module-level import would create a cycle. Env names follow `AVICENNA_<KEY_UPPER>`, except `model` and `provider` which also accept `AVICENNA_MODEL` and `AVICENNA_PROVIDER`. For dict- and set-valued settings the `cast` parses JSON from the environment.
 
