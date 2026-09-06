@@ -28,10 +28,10 @@ CI runs the TUI job on `ubuntu-latest`; the Python job runs on `windows-latest`.
 <!-- map:files:start -->
 | File | Loc | Role |
 | --- | --- | --- |
-| `package.json` | 26 | Package manifest; declares `type: module`, `bin`, scripts, and the two dev dependencies (`typescript`, `@types/node`). Zero runtime deps. |
-| `package-lock.json` | 53 | Lockfile for deterministic `npm ci` in CI. |
-| `tsconfig.json` | 22 | Compiler config: `ES2022` target, `NodeNext` modules, `strict` + `noUncheckedIndexedAccess` + `noFallthroughCasesInSwitch`, `rootDir: src`, `outDir: dist`. |
 | `README.md` | 92 | Module map, build instructions, design notes, the seam list where a visual layer attaches, and the protocol for adding an event. |
+| `package-lock.json` | 53 | Lockfile for deterministic `npm ci` in CI. |
+| `package.json` | 26 | Package manifest; declares `type: module`, `bin`, scripts, and the two dev dependencies (`typescript`, `@types/node`). Zero runtime deps. |
+| `tsconfig.json` | 22 | Compiler config: `ES2022` target, `NodeNext` modules, `strict` + `noUncheckedIndexedAccess` + `noFallthroughCasesInSwitch`, `rootDir: src`, `outDir: dist`. |
 <!-- map:files:end -->
 
 ## Subdirectories

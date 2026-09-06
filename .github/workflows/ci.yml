@@ -224,6 +224,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # check_maps.py shells out to git and parses markdown; it does not need
+      # the avicenna package, but it does need a Python interpreter.  The other
+      # jobs already have one, but this job is a bare checkout — be explicit
+      # rather than relying on the system python3 that happens to be on the
+      # runner image today.
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Every directory with mappable source files must carry a MAP.md whose
+      # file table matches exactly what is on disk.  This is the gate — the
+      # script emits GitHub ::error annotations and exits 1 on any mismatch.
+      - name: MAP.md inventory parity
+        run: python scripts/check_maps.py
+
       - name: UTF-8 without BOM, LF endings
         run: |
           status=0

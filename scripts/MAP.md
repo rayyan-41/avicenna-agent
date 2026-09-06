@@ -15,8 +15,8 @@
 <!-- map:files:start -->
 | File | Loc | Role |
 | --- | --- | --- |
+| `check_maps.py` | 427 | Gates the MAP.md tree. Enforces three properties: every tracked directory holding source has a MAP.md; the filename set inside a map's marker block equals that directory's tracked source files exactly; and no row carries an unwritten placeholder. A marker counts only when alone on its line, so a map may explain the convention in prose without tripping the duplicate check. `--fix` adds rows for new files and refreshes line counts, but writes a placeholder role deliberately, so a mechanical fix can never satisfy the gate on its own. |
 | `check_protocol_parity.py` | 94 | Parses `avicenna/events.py` with `ast` to find every concrete `Event` subclass, regex-extracts the `EventName` union members from `tui/src/protocol.ts`, and regex-extracts handled cases from `tui/src/app.ts`. Fails the build if any event name exists in one file but not the other, or is declared but unhandled. |
-| `check_maps.py` | ~ | Gates the MAP.md tree: enforces that every tracked directory with source files has a MAP.md, that the filename set inside the `<!-- map:files -->` markers matches the source files on disk exactly, and that no row contains an unwritten placeholder. |
 <!-- map:files:end -->
 
 ## Invariants

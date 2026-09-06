@@ -55,11 +55,13 @@ The frontend is a separate TypeScript toolchain.
 
 ### `hygiene` — `ubuntu-latest`
 
-Encoding, line endings, and dependency manifest invariants.
+Encoding, line endings, dependency manifest, and MAP.md tree invariants.
 
 | Step | What it enforces |
 | --- | --- |
 | **Checkout** | Source at HEAD. |
+| **Set up Python 3.12** | This job is otherwise a bare checkout; the map gate needs an interpreter, and relying on whichever `python3` the runner image ships is the kind of thing that breaks silently later. |
+| **MAP.md inventory parity** | `scripts/check_maps.py`: every tracked directory holding source has a `MAP.md`, its marker block lists exactly that directory's tracked files, and no row carries an unwritten placeholder. |
 | **UTF-8 without BOM, LF endings** | Every `.py`, `.ts`, `.md`, `.json`, `.yml` is checked for BOM and CRLF. PowerShell `.ps1` files are exempted (Windows requires CRLF). |
 | **requirements.txt stays deleted** | `pyproject.toml` is the only dependency manifest; recreating `requirements.txt` fails the build. |
 

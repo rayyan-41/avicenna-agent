@@ -96,6 +96,15 @@ answers *why the system is built this way*; the root map answers *what is true
 right now*. Keeping those separate is what stops the root map from becoming a
 second, competing doctrine document.
 
+The root map was originally specified to carry no inventory block, on the
+grounds that the repository root holds only loose files. That carve-out did not
+survive implementation. The gate checks every map it discovers, and a special
+case for one path would have to be written into the checker and then remembered
+by everyone who touched it. The root map therefore carries a normal block over
+`AGENTS.md`, `CLAUDE.md`, `README.md` and `AVICENNA.md`, and the gate stays
+uniform. `pyproject.toml` and `avicenna.png` are outside the checked extension
+set and are described in prose beneath the table.
+
 ## Discovery
 
 Maps that nothing points at are dead weight. `CLAUDE.md` and `AGENTS.md` each
