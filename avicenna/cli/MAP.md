@@ -11,7 +11,7 @@
 | File | Loc | Role |
 | --- | --- | --- |
 | `__init__.py` | 2 | Package marker; `from __future__ import annotations` only. |
-| `app.py` | 335 | Typer application, all top-level commands, subcommand group registration, TUI/headless launch helpers. |
+| `app.py` | 329 | Typer application, all top-level commands, subcommand group registration, TUI/headless launch helpers. |
 | `mcp_cmd.py` | 277 | `avicenna mcp test` command: connects to each configured MCP server in isolation, captures the real error text from the MCP client logger, and renders a rich or plain table of results. |
 <!-- map:files:end -->
 

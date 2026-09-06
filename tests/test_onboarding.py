@@ -95,6 +95,67 @@ def test_unconfigured_install_has_no_provider(monkeypatch: pytest.MonkeyPatch) -
 
 
 # ---------------------------------------------------------------------------
+# build_provider() honours the model the user chose during onboarding
+# ---------------------------------------------------------------------------
+
+class _StubProvider:
+    """Minimal stand-in so build_provider has something to return."""
+    name = "mistral"
+
+    async def complete(self, **_: Any) -> Any:
+        return object()
+
+    async def close(self) -> None:
+        pass
+
+
+def test_build_provider_uses_model_from_user_config(
+    monkeypatch: pytest.MonkeyPatch, isolated_config: dict[str, Any]
+) -> None:
+    """The model written by onboarding must reach the provider, not the hardcoded default.
+
+    Before this was centralised into build_provider(), the CLI built the
+    provider by hand with Config.MISTRAL_MODEL (the env-var fallback), ignoring
+    user_config.json — which meant an account whose tier did not include the    hardcoded default got a 403 on every generation.
+    """
+    captured: dict[str, Any] = {}
+
+    def capture_factory(provider: str, **kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return _StubProvider()
+
+    isolated_config["model"] = "mistral-small-latest"
+    monkeypatch.setattr("avicenna.secrets.read_api_key", lambda provider="mistral": "fake-key")
+    monkeypatch.setattr("avicenna.providers.registry.get_provider", capture_factory)
+
+    result = auth.build_provider()
+
+    assert result is not None
+    assert captured["model"] == "mistral-small-latest"
+
+
+def test_build_provider_env_var_overrides_user_config(
+    monkeypatch: pytest.MonkeyPatch, isolated_config: dict[str, Any]
+) -> None:
+    """MISTRAL_MODEL env var wins over user_config.json when explicitly set."""
+    captured: dict[str, Any] = {}
+
+    def capture_factory(provider: str, **kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return _StubProvider()
+
+    isolated_config["model"] = "mistral-small-latest"
+    monkeypatch.setenv("MISTRAL_MODEL", "mistral-medium-latest")
+    monkeypatch.setattr("avicenna.secrets.read_api_key", lambda provider="mistral": "fake-key")
+    monkeypatch.setattr("avicenna.providers.registry.get_provider", capture_factory)
+
+    result = auth.build_provider()
+
+    assert result is not None
+    assert captured["model"] == "mistral-medium-latest"
+
+
+# ---------------------------------------------------------------------------
 # Key validation maps failures to something a human can act on
 # ---------------------------------------------------------------------------
 

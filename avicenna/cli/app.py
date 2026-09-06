@@ -107,10 +107,8 @@ def note_cmd(
     concurrency: int = typer.Option(3, "--concurrency"),
 ) -> None:
     """Generate a note from a topic."""
-    from avicenna.providers.registry import get_provider
+    from avicenna.auth import build_provider
     from avicenna.pipeline.run import execute_run
-    from avicenna.secrets import read_api_key
-    from avicenna.config import Config
     from avicenna.vault.discovery import discover_vault
     from avicenna.vault.vault import Vault
 
@@ -129,16 +127,15 @@ def note_cmd(
     if hint_domain:
         typer.echo(f"location hint: domain={hint_domain} category={hint_category}")
 
-    # Dry run still calls the model: it performs routing AND pre-flight, which
+    # Dry run still calls the model: it performs routing AND preflight, which
     # is the whole point (it exercises the riskiest parser for one completion).
-    key = read_api_key()
-    if not key:
+    provider = build_provider()
+    if not provider:
         typer.echo(
             "No API key found. Set MISTRAL_API_KEY in .env, or run `avicenna` to configure.",
             err=True,
         )
         raise typer.Exit(1)
-    provider = get_provider("mistral", api_key=key, model=Config.MISTRAL_MODEL)
 
     asyncio.run(execute_run(
         topic, provider, bound_vault,
@@ -166,17 +163,14 @@ def run_prompt_cmd(
     vault: Optional[Path] = typer.Option(None, "--vault"),
 ) -> None:
     """Run a prompt file (for DEANIMA_AGENT_CMD integration)."""
-    from avicenna.secrets import read_api_key
+    from avicenna.auth import build_provider
     from avicenna.session import one_shot
-    from avicenna.config import Config
-    from avicenna.providers.registry import get_provider
 
     prompt = file.read_text(encoding="utf-8")
-    key = read_api_key()
-    if not key:
+    provider = build_provider()
+    if not provider:
         typer.echo("No API key configured.", err=True)
         raise typer.Exit(1)
-    provider = get_provider("mistral", api_key=key, model=Config.MISTRAL_MODEL)
     result = asyncio.run(one_shot(provider, "You are a helpful assistant.", prompt))
     typer.echo(result)
 

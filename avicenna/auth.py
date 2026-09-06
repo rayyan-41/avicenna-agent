@@ -100,7 +100,18 @@ def auth_status() -> dict[str, Any]:
 
 
 def build_provider() -> Any | None:
-    """The configured provider, or None when the user still needs onboarding."""
+    """The configured provider, or None when the user still needs onboarding.
+
+    Model precedence: MISTRAL_MODEL env var > user_config.json > DEFAULT_MODEL.
+    The env var is the legitimate operational override; user_config.json is what
+    onboarding writes; DEFAULT_MODEL is the hardcoded fallback.  Before this
+    precedence was centralised here, the CLI and gen_matrix each built the
+    provider by hand with only the env var, ignoring the model the user chose
+    during onboarding — which produced 403s on accounts whose tier did not
+    include the hardcoded default.
+    """
+    import os
+
     from avicenna.config import Config
     from avicenna.providers.registry import get_provider
     from avicenna.secrets import read_api_key
@@ -108,7 +119,12 @@ def build_provider() -> Any | None:
     key = read_api_key(DEFAULT_PROVIDER)
     if not key:
         return None
-    model = Config.load_user_config().get("model", DEFAULT_MODEL)
+    # Precedence: env var (if explicitly set) > onboarding choice > default.
+    env_model = os.getenv("MISTRAL_MODEL")
+    if env_model is not None:
+        model = env_model
+    else:
+        model = Config.load_user_config().get("model", DEFAULT_MODEL)
     return get_provider(DEFAULT_PROVIDER, api_key=key, model=model)
 
 

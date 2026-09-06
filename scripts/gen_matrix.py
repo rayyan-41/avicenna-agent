@@ -308,12 +308,27 @@ def _print_table(results: list[CellResult], elapsed: float) -> None:
             f"{r.elapsed:>6.1f}  {failed_desc}"
         )
     print(sep)
-    n_passed = sum(1 for r in results if r.status == "PASS")
-    n_failed = sum(1 for r in results if r.status == "FAIL")
-    n_skipped = sum(1 for r in results if r.status == "SKIP")
-    n_warned = sum(1 for r in results if r.status == "WARN")
-    warn_text = f", {n_warned} warned" if n_warned else ""
-    print(f"{n_passed} passed, {n_failed} failed, {n_skipped} skipped{warn_text}  ({elapsed:.1f}s total)")
+    # Count every status the table can show so the summary sums to the number
+    # of cells.  Before this fix, ERROR, TIMEOUT and WARN were silently dropped
+    # from the text summary, so a matrix where everything errored printed as
+    # "0 passed, 0 failed, 0 skipped" — looking like nothing happened.
+    counts = {}
+    for status_name in ("PASS", "FAIL", "SKIP", "TIMEOUT", "ERROR", "WARN"):
+        n = sum(1 for r in results if r.status == status_name)
+        if n:
+            counts[status_name] = n
+    total_cells = len(results)
+    accounted = sum(counts.values())
+    parts = []
+    for label, key in [
+        ("passed", "PASS"), ("failed", "FAIL"), ("skipped", "SKIP"),
+        ("errored", "ERROR"), ("timed out", "TIMEOUT"), ("warned", "WARN"),
+    ]:
+        if key in counts:
+            parts.append(f"{counts[key]} {label}")
+    detail = ", ".join(parts) if parts else "no cells"
+    check = "" if accounted == total_cells else f" [BUG: counted {accounted} of {total_cells}]"
+    print(f"{detail}  ({total_cells} total, {elapsed:.1f}s){check}")
 
 
 def _print_json(results: list[CellResult], elapsed: float) -> None:
@@ -335,7 +350,10 @@ def _print_json(results: list[CellResult], elapsed: float) -> None:
             "passed": sum(1 for r in results if r.status == "PASS"),
             "failed": sum(1 for r in results if r.status == "FAIL"),
             "skipped": sum(1 for r in results if r.status == "SKIP"),
+            "errors": sum(1 for r in results if r.status == "ERROR"),
+            "timeouts": sum(1 for r in results if r.status == "TIMEOUT"),
             "warnings": sum(1 for r in results if r.status == "WARN"),
+            "total": len(results),
             "total_s": round(elapsed, 1),
         },
     }))
@@ -610,18 +628,15 @@ async def _async_main(args: argparse.Namespace) -> int:
     note_index = _vault_note_index(vault)
 
     # -- provider (routing + preflight call the model even in dry-run) ------
-    from avicenna.secrets import read_api_key
-    from avicenna.config import Config
-    from avicenna.providers.registry import get_provider
+    from avicenna.auth import build_provider
 
-    key = read_api_key()
-    if not key:
+    provider = build_provider()
+    if not provider:
         print(
             "No API key found. Set MISTRAL_API_KEY in .env or run `avicenna` to configure.",
             file=sys.stderr,
         )
         return 1
-    provider = get_provider("mistral", api_key=key, model=Config.MISTRAL_MODEL)
 
     # -- execute the matrix, sequentially -----------------------------------
     results: list[CellResult] = []

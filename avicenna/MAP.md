@@ -16,7 +16,7 @@
 | File | Loc | Role |
 | --- | --- | --- |
 | `__init__.py` | 2 | Package marker; no re-exports. |
-| `auth.py` | 119 | Provider onboarding: validate a key with one real completion, persist it, report status. Deferred imports from `providers/` keep the auth module importable without pulling in the SDK. |
+| `auth.py` | 135 | Provider onboarding: validate a key with one real completion, persist it, report status. Deferred imports from `providers/` keep the auth module importable without pulling in the SDK. |
 | `bus.py` | 51 | Fan-out async event bus. Each subscriber gets its own queue; `LogMessage` events are droppable under backpressure, all others block the emitter. |
 | `chat.py` | 109 | Agent chat controller. One `AgentChat` per vault agent with a per-agent lock to prevent interleaved appends. Tool allowlist (`CHAT_SAFE_TOOLS` plus the agent's MCP servers) keeps pipeline-only mutators unreachable from chat. |
 | `concurrency.py` | 26 | `gather_sections`: bounded concurrent execution of N awaitables via a semaphore (default 3). One failure does not cancel siblings. |
