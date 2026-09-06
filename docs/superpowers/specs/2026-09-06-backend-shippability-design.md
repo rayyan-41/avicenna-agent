@@ -114,6 +114,22 @@ doing nothing. When a token exists, the job gets written then.
 
 ## Non-goals
 
-Widening `mypy --strict` to `tools`, `vault` and `cli`. Adding a second provider
-backend. Any change to the frontend. Any change to pipeline control flow — the
-generation matrix observes the pipeline, it does not modify it.
+Adding a second provider backend. Any change to the frontend.
+
+Two non-goals stated in the first draft did not survive implementation, and are
+recorded here rather than quietly deleted.
+
+**Confining `mypy --strict` to the bridge.** `--strict` follows imports, so
+adding `avicenna/bridge` pulled `chat.py`, `secrets.py` and `vault/context.py`
+into the checked set as well. Five diagnostics had to be fixed in files this
+task claimed not to touch. A package cannot be brought under strict checking in
+isolation; the honest scope of "add the bridge" is "add the bridge and whatever
+it imports".
+
+**Leaving pipeline control flow alone.** The generation matrix does only
+observe the pipeline, as stated. But the healthcheck this task added measured
+routing at three of six domains correct, and the fix — inverting the resolution
+order so a model classifies and the deterministic scorer becomes the fallback —
+changes `RoutingStage`. That work is specified separately in
+`2026-09-06-llm-assisted-routing-design.md`. It is a change to which agent gets
+selected, not to how stages branch: contract tokens still gate every step.

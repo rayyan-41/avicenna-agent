@@ -15,7 +15,10 @@ from pathlib import Path
 
 import pytest
 
+from avicenna.providers.base import Completion
+from avicenna.providers.fake import FakeProvider
 from avicenna.vault.routing import (
+    classify_domain,
     clear_cache,
     content_words,
     normalise,
@@ -179,3 +182,145 @@ def test_pipeline_agents_are_never_routing_candidates(tmp_path: Path) -> None:
     v = _make_vault(tmp_path, [("alpha", "history")])
     names = {s.agent.name for s in score_domains(v, "history")}
     assert names == {"alpha"}
+
+
+def test_interrogative_stopwords_do_not_misroute(tmp_path: Path) -> None:
+    """Regression: 'how' leaked into domain vocab via kebab-case theme
+    decomposition and caused the largest domain to win unrelated topics.
+
+    If STOPWORDS is missing interrogatives, the history domain accumulates
+    noise words like 'how' at entity weight (because a note tagged
+    'how-influenced' decomposes to {'how', 'influenced'}) and outscores the
+    domain whose vocabulary actually matches the topic.
+    """
+    (tmp_path / ".agents" / "agents").mkdir(parents=True)
+    (tmp_path / ".agents" / "skills").mkdir(parents=True)
+    (tmp_path / ".agents" / "tools").mkdir(parents=True)
+    (tmp_path / "AGENTS.md").write_text("# protocol\n", encoding="utf-8")
+    taxonomy = {
+        "version": 1,
+        "schema": {"marker": "cli", "markers": ["cli", "manual"]},
+        "domains": {"art": ["art-cat"], "history": ["history-cat"]},
+        "universalCategories": ["moc"],
+        "folderMap": {},
+        "types": ["concept"],
+        "themes": ["how-influenced", "painting-style"],
+        "reservedModifiers": [],
+    }
+    (tmp_path / ".agents" / "taxonomy.json").write_text(
+        json.dumps(taxonomy), encoding="utf-8"
+    )
+    for name, domain in [("michelangelo", "art"), ("machiavelli", "history")]:
+        (tmp_path / ".agents" / "agents" / f"{name}.md").write_text(
+            f"---\nname: {name}\ndescription: agent for {domain}\n"
+            f"type: content\ndomain: {domain}\n---\n\nbody\n",
+            encoding="utf-8",
+        )
+    # Art notes carrying domain-specific vocabulary.
+    (tmp_path / "Art").mkdir()
+    (tmp_path / "Art" / "Painting.md").write_text(
+        "---\ntags: [art, art-cat, concept, painting-style, depth]\n---\n\nbody\n",
+        encoding="utf-8",
+    )
+    # History notes carrying a kebab-case theme that decomposes to {'how',
+    # 'influenced'} — 'how' must be filtered as a stopword.
+    (tmp_path / "History").mkdir()
+    (tmp_path / "History" / "Rome.md").write_text(
+        "---\ntags: [history, history-cat, concept, how-influenced, decline]\n---\n\nbody\n",
+        encoding="utf-8",
+    )
+    clear_cache()
+    v = Vault.load(tmp_path)
+
+    topic = "how the depth of painting shapes emotional experience"
+    agent = route_request(v, topic)
+    assert agent is not None, (
+        "routing refused a topic with genuine domain vocabulary"
+    )
+    assert agent.name == "michelangelo", (
+        f"expected art (michelangelo), got {agent.domain} ({agent.name})\n"
+        + "\n".join(f"      {s}" for s in score_domains(v, topic)[:4])
+    )
+
+
+# --- LLM-assisted classifier ------------------------------------------------
+
+def _two_domain_vault(tmp_path: Path) -> Vault:
+    """Shared fixture: a two-domain vault for classifier tests."""
+    return _make_vault(tmp_path, [("alpha", "history"), ("beta", "science")])
+
+
+def test_classifier_returns_valid_domain(tmp_path: Path) -> None:
+    """A correct domain from the LLM is used directly."""
+    v = _two_domain_vault(tmp_path)
+    provider = FakeProvider([Completion(text='{"domain": "history"}')])
+    import asyncio
+    result = asyncio.run(classify_domain(v, "the fall of Rome", provider))
+    assert result == "history"
+
+
+def test_classifier_unknown_domain_falls_back(tmp_path: Path) -> None:
+    """An unknown domain name is rejected — it must NOT be returned."""
+    v = _two_domain_vault(tmp_path)
+    provider = FakeProvider([Completion(text='{"domain": "philosophy"}')])
+    import asyncio
+    result = asyncio.run(classify_domain(v, "Kant's critique", provider))
+    assert result is None
+    # The caller (RoutingStage) would then fall through to route_request.
+
+
+def test_classifier_malformed_json_falls_back(tmp_path: Path) -> None:
+    """Unparseable output must not raise or produce a domain."""
+    v = _two_domain_vault(tmp_path)
+    provider = FakeProvider([Completion(text="I'm not sure, maybe history?")])
+    import asyncio
+    result = asyncio.run(classify_domain(v, "something vague", provider))
+    assert result is None
+
+
+def test_classifier_strips_json_fencing(tmp_path: Path) -> None:
+    """```json fences are stripped defensively and the JSON is parsed."""
+    v = _two_domain_vault(tmp_path)
+    fenced = '```json\n{"domain": "science"}\n```'
+    provider = FakeProvider([Completion(text=fenced)])
+    import asyncio
+    result = asyncio.run(classify_domain(v, "neural networks", provider))
+    assert result == "science"
+
+
+def test_classifier_provider_raises_falls_back(tmp_path: Path) -> None:
+    """A provider exception must not escape; it returns None."""
+    v = _two_domain_vault(tmp_path)
+
+    def _boom(system: str, messages: object) -> Completion:
+        raise RuntimeError("API key invalid")
+
+    provider = FakeProvider(_boom)
+    import asyncio
+    result = asyncio.run(classify_domain(v, "test topic", provider))
+    assert result is None
+
+
+def test_classifier_empty_response_falls_back(tmp_path: Path) -> None:
+    """An empty completion text returns None, not an empty string."""
+    v = _two_domain_vault(tmp_path)
+    provider = FakeProvider([Completion(text="")])
+    import asyncio
+    result = asyncio.run(classify_domain(v, "test", provider))
+    assert result is None
+
+
+def test_classifier_none_text_falls_back(tmp_path: Path) -> None:
+    """Completion.text=None must be handled without raising."""
+    v = _two_domain_vault(tmp_path)
+    provider = FakeProvider([Completion(text=None)])
+    import asyncio
+    result = asyncio.run(classify_domain(v, "test", provider))
+    assert result is None
+
+
+def test_both_fail_returns_none(tmp_path: Path) -> None:
+    """When both classifier and scorer fail, route_request returns None."""
+    v = _two_domain_vault(tmp_path)
+    # Scorer returns None for completely unrecognisable input.
+    assert route_request(v, "asdf qwerty zzzz") is None

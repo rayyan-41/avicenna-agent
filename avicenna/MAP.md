@@ -18,11 +18,11 @@
 | `__init__.py` | 2 | Package marker; no re-exports. |
 | `auth.py` | 119 | Provider onboarding: validate a key with one real completion, persist it, report status. Deferred imports from `providers/` keep the auth module importable without pulling in the SDK. |
 | `bus.py` | 51 | Fan-out async event bus. Each subscriber gets its own queue; `LogMessage` events are droppable under backpressure, all others block the emitter. |
-| `chat.py` | 108 | Agent chat controller. One `AgentChat` per vault agent with a per-agent lock to prevent interleaved appends. Tool allowlist (`CHAT_SAFE_TOOLS` plus the agent's MCP servers) keeps pipeline-only mutators unreachable from chat. |
+| `chat.py` | 109 | Agent chat controller. One `AgentChat` per vault agent with a per-agent lock to prevent interleaved appends. Tool allowlist (`CHAT_SAFE_TOOLS` plus the agent's MCP servers) keeps pipeline-only mutators unreachable from chat. |
 | `concurrency.py` | 26 | `gather_sections`: bounded concurrent execution of N awaitables via a semaphore (default 3). One failure does not cancel siblings. |
 | `config.py` | 127 | Central configuration: env resolution, `.env` loading via dotenv, MCP and user config persistence. All diagnostics go to stderr — never stdout, which belongs to the NDJSON wire protocol. Atomic writes with `os.replace`; best-effort `chmod` on the user config. |
 | `events.py` | 165 | Typed event taxonomy — frozen dataclasses for every pipeline signal. The bridge serialises structurally (class name becomes `event`, fields become `data`), so adding an event here is sufficient for the wire. A matching `EventName` entry in `tui/src/protocol.ts` plus a frontend translator case are required; `scripts/check_protocol_parity.py` gates this in CI. |
-| `secrets.py` | 61 | API key read/write/redact. Precedence: env var, OS keyring, `user_config.json` file fallback. Write prefers keyring and tells the caller where the key landed ("keyring" or "file") so the frontend can be honest about protection. |
+| `secrets.py` | 62 | API key read/write/redact. Precedence: env var, OS keyring, `user_config.json` file fallback. Write prefers keyring and tells the caller where the key landed ("keyring" or "file") so the frontend can be honest about protection. |
 | `session.py` | 118 | The two runtime primitives. `Session` owns a message list and the tool-resolution loop (up to 8 iterations) on top of the stateless provider ABC. `one_shot` is `SPAWN_SECTION`: builds a Session, sends one prompt, returns the text, discards the context. This is what gives every heading a fresh context — the mechanism behind AGENTS.md §2.1. |
 <!-- map:files:end -->
 

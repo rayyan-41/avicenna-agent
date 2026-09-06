@@ -79,3 +79,76 @@ def test_get_provider_mistral_exists():
     """Mistral is registered but importing it pulls in the SDK — just check registry."""
     p = get_provider("fake")
     assert p.name == "fake"
+
+
+# ------------------------------------------------------------------
+# MistralProvider._map_error — offline, no SDK call needed
+# ------------------------------------------------------------------
+
+class _FakeHTTPError(Exception):
+    """Stand-in for an SDK HTTP exception carrying a status_code attribute."""
+
+    def __init__(self, status_code: int, message: str = "boom") -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+async def test_map_error_403_is_auth_error():
+    """A 403 (e.g. tier restriction) must be terminal, not retried."""
+    from avicenna.providers.errors import AuthError
+    from avicenna.providers.mistral import MistralProvider
+
+    exc = _FakeHTTPError(
+        403,
+        '{"message":"This model is not available in your subscription tier",'
+        '"type":"tier_not_allowed","code":"1910"}',
+    )
+    mapped = MistralProvider._map_error(exc)
+    assert isinstance(mapped, AuthError)
+
+
+async def test_map_error_403_preserves_api_message():
+    """The caller must see the API's own explanation, not a generic string."""
+    from avicenna.providers.mistral import MistralProvider
+
+    api_msg = (
+        '{"message":"This model is not available in your subscription tier",'
+        '"type":"tier_not_allowed","code":"1910"}'
+    )
+    mapped = MistralProvider._map_error(_FakeHTTPError(403, api_msg))
+    assert api_msg in str(mapped)
+
+
+async def test_map_error_401_is_auth_error():
+    from avicenna.providers.errors import AuthError
+    from avicenna.providers.mistral import MistralProvider
+
+    assert isinstance(MistralProvider._map_error(_FakeHTTPError(401)), AuthError)
+
+
+async def test_map_error_429_is_rate_limit():
+    from avicenna.providers.errors import RateLimitError
+    from avicenna.providers.mistral import MistralProvider
+
+    assert isinstance(MistralProvider._map_error(_FakeHTTPError(429)), RateLimitError)
+
+
+async def test_map_error_500_is_transient():
+    from avicenna.providers.errors import TransientError
+    from avicenna.providers.mistral import MistralProvider
+
+    assert isinstance(MistralProvider._map_error(_FakeHTTPError(500)), TransientError)
+
+
+async def test_map_error_400_is_bad_request():
+    from avicenna.providers.errors import BadRequestError
+    from avicenna.providers.mistral import MistralProvider
+
+    assert isinstance(MistralProvider._map_error(_FakeHTTPError(400)), BadRequestError)
+
+
+async def test_map_error_422_is_bad_request():
+    from avicenna.providers.errors import BadRequestError
+    from avicenna.providers.mistral import MistralProvider
+
+    assert isinstance(MistralProvider._map_error(_FakeHTTPError(422)), BadRequestError)

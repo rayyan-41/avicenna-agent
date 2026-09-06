@@ -24,7 +24,7 @@ import sys
 import traceback
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 from avicenna.bridge.protocol import (
     PROTOCOL_VERSION,
@@ -43,7 +43,10 @@ class BridgeError(RuntimeError):
 class Bridge:
     def __init__(self, vault_path: str | None = None) -> None:
         self._vault_arg = vault_path
-        self._out: io.TextIOBase = sys.stdout  # replaced in run()
+        # TextIO, not TextIOWrapper: _out only needs .write() and .flush().
+        # The one call that requires TextIOWrapper (.reconfigure) is always on
+        # a local narrowed by isinstance, never through this field.
+        self._out: TextIO = sys.stdout
         self._write_lock = asyncio.Lock()
         self._bus = EventBus()
         self._tasks: set[asyncio.Task[Any]] = set()
@@ -445,16 +448,21 @@ class Bridge:
     async def run(self) -> None:
         # stdout is the protocol; hand the core stderr so its prints are safe.
         real_stdout = sys.stdout
-        with contextlib.suppress(Exception):
-            real_stdout.reconfigure(encoding="utf-8", newline="\n")
-        with contextlib.suppress(Exception):
-            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        # isinstance narrowing: sys.stdout is typed as TextIO by the stubs,
+        # but at runtime (CPython, PyPy) it is always a TextIOWrapper.
+        if isinstance(real_stdout, io.TextIOWrapper):
+            with contextlib.suppress(Exception):
+                real_stdout.reconfigure(encoding="utf-8", newline="\n")
+        if isinstance(sys.stderr, io.TextIOWrapper):
+            with contextlib.suppress(Exception):
+                sys.stderr.reconfigure(encoding="utf-8", errors="replace")
         self._out = real_stdout
         sys.stdout = sys.stderr
 
         stdin = sys.stdin
-        with contextlib.suppress(Exception):
-            stdin.reconfigure(encoding="utf-8")
+        if isinstance(stdin, io.TextIOWrapper):
+            with contextlib.suppress(Exception):
+                stdin.reconfigure(encoding="utf-8")
 
         pump = self._spawn(self._pump_events())
         await self._send({"type": "ready", "protocol": PROTOCOL_VERSION})

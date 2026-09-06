@@ -22,7 +22,7 @@ from avicenna.pipeline.stage import PipelineAbort, PipelineStage
 from avicenna.pipeline.sections import generate_sections
 from avicenna.pipeline.toolcall import invoke_tool
 from avicenna.tools.base import ToolResult
-from avicenna.vault.routing import route_request, validate_domain
+from avicenna.vault.routing import classify_domain, route_request, validate_domain
 
 
 # --- graceful degradation ---------------------------------------------------
@@ -204,11 +204,26 @@ class RoutingStage(PipelineStage):
             # resumed run must stay with the agent that wrote its chunks.
             pass
         else:
-            agent = route_request(vault, ctx.spec.topic)
-            if agent is None:
-                raise PipelineAbort("preflight",
-                    "cannot determine domain; try --domain or be more specific")
-            ctx.domain = agent.domain
+            # 1. LLM classifier — fast semantic classification against the
+            #    vault's closed domain set.
+            domain = await classify_domain(vault, ctx.spec.topic, ctx.spec.provider)
+            if domain is not None:
+                ctx.domain = domain
+                await ctx.emit(LogMessage, level="info",
+                    text=f"domain resolved by classifier: {domain}")
+            else:
+                # 2. Deterministic scorer — the offline fallback.  Still pinned
+                #    by the original weight constants and thirty regression tests.
+                agent = route_request(vault, ctx.spec.topic)
+                if agent is not None:
+                    ctx.domain = agent.domain
+                    await ctx.emit(LogMessage, level="info",
+                        text=f"domain resolved by scorer: {agent.domain}")
+                else:
+                    await ctx.emit(LogMessage, level="warning",
+                        text="domain unresolved: classifier and scorer both returned None")
+                    raise PipelineAbort("preflight",
+                        "cannot determine domain; try --domain or be more specific")
         if not ctx.domain:
             raise PipelineAbort("preflight", "no domain resolved for this run")
         ctx.agent = validate_domain(vault, ctx.domain)

@@ -22,16 +22,25 @@
 | Component | Status | Notes |
 | --- | --- | --- |
 | Generation pipeline | Working | 14 stages, contract-gated, fresh context per heading. |
-| Vault binding & routing | Working | Deterministic keyword scoring; vocabulary derived from vault notes. |
+| Vault binding & routing | Working | A model classifies the topic against the vault's domains; `validate_domain` gates the answer; the deterministic keyword scorer is the offline fallback and refusal is the last resort. Keyword-only scoring reached 3 of 6 domains on the reference vault, which is what prompted the inversion. |
 | Tool layer | Working | Registry with BUILTIN > VAULT_PS1 > MCP precedence; contract tokens. |
 | MCP layer | Working | Full client, config schema, tool-spec export. Ships zero servers. |
 | Provider layer | Working | Mistral is the only real backend. FakeProvider is the offline test double. |
 | Stdio bridge | Working | NDJSON over stdin/stdout; structural event serialisation; no blocking I/O. |
-| CLI | Working | Typer app: note, route, init, mcp, config, headless mode. |
+| CLI | Working | Typer app: note, route, init, mcp, config, doctor, headless mode. |
+| Healthcheck | Working | `avicenna doctor` / `scripts/healthcheck.py`. Eight probes over config, provider reachability, vault load, tool registry, vault PowerShell tools, MCP servers, all bridge methods, and routing. This is what an "endpoint" means here: there is no HTTP surface. |
+| Live generation matrix | Working | `scripts/gen_matrix.py`. One ~1000-word note per domain agent against a real vault, gated behind `--yes`, refusing a dirty git tree, printing revert commands before it writes. |
+| Continuous delivery | Working | `.github/workflows/release.yml` on `v*` tags: gates via `workflow_call` into `ci.yml`, builds sdist, wheel and the tui bundle, publishes a GitHub Release. No PyPI job — no token exists. |
 | Terminal frontend | Partial | Mechanism works (bridge, input, screen, commands). Deliberately an unstyled skeleton with no visual design — no palette, no glyph set, no boxes. A design pass must build a new layer on top. |
 | Map context tree | Working | 20 maps, one per source directory. `scripts/check_maps.py` gates coverage, inventory parity and placeholders in CI's `hygiene` job. |
 
 Mistral is the only implemented provider. There is no OpenAI, Anthropic, or Gemini backend — adding one means implementing `LLMProvider` from `providers/base.py` and registering a lazy factory. `FakeProvider` is a scripted in-memory stand-in; the entire test suite runs against it with no API key and no network.
+
+Because the suite runs entirely against `FakeProvider`, a green build says
+nothing about whether the product works against a real API. It did not, once:
+the configured model was gated behind a subscription tier and every call
+returned 403 while all tests passed. `avicenna doctor` exists to close that gap
+and is the first thing to run when something behaves oddly.
 
 ## Runtime shape
 
@@ -109,6 +118,9 @@ pip install -e ".[dev]"                          # editable install + test extra
 pytest -q                                         # full backend test suite
 mypy --strict avicenna/providers avicenna/pipeline # strict type check (must be clean)
 python scripts/check_protocol_parity.py           # events.py vs protocol.ts
+python scripts/check_maps.py                      # MAP.md coverage + parity (--fix to refresh)
+avicenna doctor                                   # eight live probes; --json for machines
+python scripts/gen_matrix.py                      # prints the plan; --yes to actually generate
 
 # frontend
 cd tui && npm ci && npm run typecheck && npm run build && npm test

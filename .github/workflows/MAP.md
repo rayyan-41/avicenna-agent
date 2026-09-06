@@ -14,7 +14,8 @@
 <!-- map:files:start -->
 | File | Loc | Role |
 | --- | --- | --- |
-| `ci.yml` | 265 | The sole workflow file. Defines all three CI jobs and every enforcement gate. Runs on push/PR to `master` and `harness`. |
+| `ci.yml` | 298 | The sole workflow file. Defines all three CI jobs and every enforcement gate. Runs on push/PR to `master` and `harness`. |
+| `release.yml` | 158 | Tag-triggered delivery (`v*`). Its `gates` job delegates to `ci.yml` via `workflow_call` rather than copying the step list — an earlier hand-copied version drifted within an hour of being written, missing the bridge when the strict type check widened. Builds the sdist, wheel and `tui` bundle, then publishes them to a GitHub Release with `gh release create`, which takes globs directly and needs `GH_REPO` because the release job has no checkout for `gh` to infer the repo from. Carries no PyPI publish job on purpose: no token exists, and a publish step that cannot publish is the same defect as a check that cannot fail. |
 <!-- map:files:end -->
 
 ## Jobs and steps

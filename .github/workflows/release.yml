@@ -1,0 +1,158 @@
+name: Release
+
+# Triggered on version tags. The quality gates must pass before any build
+# artefact is produced — a release that skipped the tests is worse than no
+# release workflow.
+on:
+  push:
+    tags:
+      - "v*"
+
+# Only contents: write is needed — to create the release and upload assets.
+# Nothing else is touched.
+permissions:
+  contents: write
+
+jobs:
+  # ── Quality gates ──────────────────────────────────────────────────────
+  # Calls the full CI workflow rather than duplicating its steps here.
+  # ci.yml's workflow_call trigger lets us reuse its build, tui, and
+  # hygiene jobs as a single gate.  This is strictly more coverage than
+  # the hand-copied subset it replaces — all three jobs run, not just
+  # the Python build's steps — and it cannot drift, because there is
+  # only one source of truth.
+  gates:
+    uses: ./.github/workflows/ci.yml
+
+  # ── Python package build ───────────────────────────────────────────────
+  # Runner: ubuntu-latest.  The sdist and pure-Python wheel are platform-
+  # independent — setuptools does not compile C extensions here, so Linux
+  # produces the same artefacts as Windows.  The tests that need Windows
+  # already ran in `gates`.
+  build-python:
+    needs: gates
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build sdist and wheel
+        run: |
+          pip install build
+          python -m build
+
+      - name: Upload Python artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-package
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+
+  # ── TypeScript frontend build ──────────────────────────────────────────
+  # Runner: ubuntu-latest.  The frontend is a pure-JS/TS bundle; the
+  # toolchain is identical across platforms and Ubuntu is cheaper.
+  build-tui:
+    needs: gates
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: tui/package-lock.json
+
+      - name: Install
+        working-directory: tui
+        run: npm ci
+
+      - name: Type check
+        working-directory: tui
+        run: npm run typecheck
+
+      - name: Tests
+        working-directory: tui
+        run: npm test
+
+      # The skeleton is unstyled on purpose. Colour must not creep back in
+      # through a patch, even on a release tag.
+      - name: Frontend stays unstyled
+        run: |
+          if grep -rnE "\\\\x1b\\[[0-9;]*m|\\\\u001b\\[[0-9;]*m" tui/src --include=*.ts \
+               | grep -v "ansi.ts" ; then
+            echo "::error::Raw SGR escape outside ansi.ts - style through ansi.ts or not at all."
+            exit 1
+          fi
+          echo "No raw colour escapes outside ansi.ts."
+
+      - name: Build
+        working-directory: tui
+        run: npm run build
+
+      - name: Upload frontend artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tui-bundle
+          path: tui/dist/
+
+  # ── GitHub Release ─────────────────────────────────────────────────────
+  # Runner: ubuntu-latest — this job only creates a release and uploads
+  # assets via the GitHub API.  No platform-specific work.
+  release:
+    needs: [build-python, build-tui]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download Python artefacts
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package
+          path: staging/python
+
+      - name: Download frontend artefact
+        uses: actions/download-artifact@v4
+        with:
+          name: tui-bundle
+          path: staging/tui
+
+      - name: Package frontend bundle
+        run: tar -czf staging/tui-bundle-${{ github.ref_name }}.tar.gz -C staging/tui .
+
+      # gh is preinstalled on every GitHub-hosted runner and accepts globs
+      # directly, so we do not need to resolve wheel filenames or wire
+      # upload_url between steps.  The existing `permissions: contents: write`
+      # block is sufficient.
+      #
+      # GH_REPO is required because this job has no checkout step — gh resolves
+      # the target repository from a git remote in the working directory, and
+      # without one it fails with "not a git repository". Setting GH_REPO
+      # explicitly replaces that lookup. Its absence fails only on a real tag
+      # push, which is the most expensive place to discover it.
+      - name: Create release and attach assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes "Release $GITHUB_REF_NAME" \
+            staging/python/*.tar.gz \
+            staging/python/*.whl \
+            staging/tui-bundle-${{ github.ref_name }}.tar.gz
+
+# There is deliberately no PyPI publish job. No token exists for one. This
+# repository's policy is that a check which cannot fail the build is
+# documentation rather than a gate, and a publish step that cannot publish
+# is the same defect wearing different clothes. When a PyPI token is
+# provisioned, the publish job gets written then — not before.

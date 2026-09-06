@@ -13,7 +13,7 @@
 | `__init__.py` | 8 | Re-exports `PROTOCOL_VERSION`, `Bridge`, `BridgeError`, `main`. |
 | `__main__.py` | 10 | `python -m avicenna.bridge` entry point; delegates to `server.main()`. |
 | `protocol.py` | 73 | Wire format definitions. Exports `encode()` for JSON serialisation, `event_frame()` to turn `avicenna.events` dataclasses into wire frames, and `ok_frame()`/`err_frame()` for request responses. The envelope shapes are: request `{"type":"req","id":"...","method":"...","params":{}}`, response `{"type":"res","id":"...","ok":true,"result":{}}` or `{"type":"res","id":"...","ok":false,"error":{"kind":"...","message":"..."}}`, event `{"type":"event","event":"...","runId":"...","seq":0,"ts":0.0,"data":{}}`. A ready frame `{"type":"ready","protocol":N}` is sent on startup. This file is mirrored by `tui/src/protocol.ts`; `scripts/check_protocol_parity.py` gates the pair in CI. |
-| `server.py` | 510 | The bridge itself. `Bridge` class owns the async request loop, the event pump, and lazy resolution of vault/provider/chat. `main()` parses `--vault` and runs the bridge. Dispatches methods via `_m_<name>` convention — the dot in a method name becomes an underscore lookup. |
+| `server.py` | 518 | The bridge itself. `Bridge` class owns the async request loop, the event pump, and lazy resolution of vault/provider/chat. `main()` parses `--vault` and runs the bridge. Dispatches methods via `_m_<name>` convention — the dot in a method name becomes an underscore lookup. |
 <!-- map:files:end -->
 
 ## Bridge methods

@@ -181,6 +181,24 @@ def run_prompt_cmd(
     typer.echo(result)
 
 
+@app.command("doctor")
+def doctor_cmd(
+    as_json: bool = typer.Option(False, "--json", help="Machine-readable JSON output"),
+    vault: Optional[Path] = typer.Option(None, "--vault", help="Override vault path"),
+) -> None:
+    """Run healthcheck probes against this installation."""
+    import subprocess
+
+    script = PROJECT_ROOT / "scripts" / "healthcheck.py"
+    argv = [sys.executable, str(script)]
+    if as_json:
+        argv.append("--json")
+    if vault is not None:
+        argv += ["--vault", str(vault)]
+    result = subprocess.run(argv)
+    raise typer.Exit(result.returncode)
+
+
 # ---------------------------------------------------------------------------
 # Config subcommands
 # ---------------------------------------------------------------------------

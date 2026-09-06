@@ -12,6 +12,9 @@ on:
     branches: [master, harness]
   pull_request:
     branches: [master, harness]
+  # release.yml calls this workflow as its gate job. The push and PR triggers
+  # above keep working exactly as before — this is purely additive.
+  workflow_call:
 
 jobs:
   build:
@@ -35,8 +38,13 @@ jobs:
       - name: Tests
         run: pytest -q
 
+      # server.py carries the entire wire contract: every method the frontend
+      # calls, every event frame it parses, every error envelope it handles.  A
+      # type error there desyncs the frontend rather than producing a clean
+      # crash, so the bridge joins the strict set alongside providers and
+      # pipeline.
       - name: Type check (strict)
-        run: mypy --strict avicenna/providers avicenna/pipeline
+        run: mypy --strict avicenna/providers avicenna/pipeline avicenna/bridge
 
       # A blocking call inside the bridge stalls the event pump, which freezes
       # the interface just as surely as the old in-process TUI froze: the
@@ -103,19 +111,44 @@ jobs:
           }
           Write-Host "No vendor SDK imports outside avicenna/providers/."
 
-      # The reference vault's name is one developer's directory. It must not be
-      # baked into the harness, in code or in docstrings.
+      # The reference vault's name is one developer's directory.  It must not
+      # be baked into the harness, in code or in docstrings.  The invariant is
+      # repository-wide (CLAUDE.md, AGENTS.md §2.5), so this gate scans every
+      # tracked file, not just avicenna/**/*.py.  git ls-files excludes
+      # untracked scratch and ignored directories for free.
+      #
+      # Allowlist — files that necessarily quote the name to document or
+      # implement the rule itself.  Each entry comments WHY it is exempt:
+      #   tests/                    — test fixtures exercise the reference vault
+      #   .github/workflows/ci.yml — this step contains the search pattern
+      #   AGENTS.md                 — states the invariant (§2.5)
+      #   CLAUDE.md                 — states the invariant (Rules that bite)
       - name: No reference-vault name outside tests
         shell: pwsh
         run: |
-          $hits = Get-ChildItem -Path "avicenna" -Recurse -File -Include *.py |
-            Select-String -Pattern 'De Anima'
-          if ($hits) {
-            Write-Host "::error::'De Anima' must not appear outside tests/."
+          $exclusions = @(
+            '^tests[/\\]'
+            '^\.github[/\\]workflows[/\\]ci\.yml$'
+            '^AGENTS\.md$'
+            '^CLAUDE\.md$'
+          )
+          $hits = @()
+          foreach ($raw in (git ls-files)) {
+            $f = $raw -replace '\\', '/'
+            $skip = $false
+            foreach ($pat in $exclusions) {
+              if ($f -match $pat) { $skip = $true; break }
+            }
+            if ($skip) { continue }
+            $found = Select-String -LiteralPath $raw -Pattern 'De Anima'
+            if ($found) { $hits += $found }
+          }
+          if ($hits.Count -gt 0) {
+            Write-Host "::error::'De Anima' must not appear outside the allowlist."
             $hits | ForEach-Object { Write-Host ("  {0}:{1}" -f $_.Path, $_.LineNumber) }
             exit 1
           }
-          Write-Host "No reference-vault name in avicenna/."
+          Write-Host "No reference-vault name found outside the allowlist."
 
       # AGENTS.md requires `from __future__ import annotations` in every module.
       - name: Future annotations everywhere

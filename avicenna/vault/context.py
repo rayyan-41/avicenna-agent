@@ -62,14 +62,18 @@ class VaultContext:
 
     @property
     def summary(self) -> str:
-        if not self.found:
+        # Narrow to a local so mypy can see root is not None after the guard.
+        # `self.found` is `self.root is not None`, but mypy does not track
+        # property-based narrowing on self — a local variable it does.
+        root = self.root
+        if not root:
             return "no vault found - run `avicenna init` or pass --vault"
         # Callers prefix this with `badge`, so do not repeat it here.
         where = str(self.relative) if (self.inside and self.relative and str(self.relative) != ".") else ""
         if self.inside:
             loc = f" / {where}" if where else " (vault root)"
-            return f"{self.root.name}{loc}"
-        return f"bound to {self.root} via {self.source}; cwd is outside the vault"
+            return f"{root.name}{loc}"
+        return f"bound to {root} via {self.source}; cwd is outside the vault"
 
     # ---- detection --------------------------------------------------------
 

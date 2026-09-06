@@ -234,7 +234,12 @@ class MistralProvider(LLMProvider):
     @staticmethod
     def _map_error(exc: Exception) -> ProviderError:
         status = getattr(exc, "status_code", None)
-        if status == 401:
+        # 403 is terminal: the credential is valid but not authorised for this
+        # request (e.g. a model gated behind a subscription tier).  When 403
+        # fell through to TransientError the provider retried a tier-restricted
+        # call four times with exponential backoff — a guaranteed failure
+        # presented as a network problem to the healthcheck.
+        if status in (401, 403):
             return AuthError(str(exc))
         if status == 429:
             retry = getattr(exc, "retry_after", None) if hasattr(exc, "retry_after") else None

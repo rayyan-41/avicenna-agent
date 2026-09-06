@@ -29,13 +29,14 @@ def read_api_key(provider: str = "mistral") -> str | None:
         return value
     try:
         import keyring
-        stored = keyring.get_password(SERVICE, provider)
+        stored: str | None = keyring.get_password(SERVICE, provider)
     except Exception:
         stored = None
     if stored:
         return stored
     try:
-        return Config.load_user_config().get("api_keys", {}).get(provider)
+        api_keys: dict[str, str] = Config.load_user_config().get("api_keys", {})
+        return api_keys.get(provider)
     except Exception:
         return None
 

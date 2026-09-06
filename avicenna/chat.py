@@ -18,6 +18,7 @@ from avicenna.providers.base import Completion, LLMProvider, Message, ToolSpec
 from avicenna.session import Session
 from avicenna.tools.registry import ToolRegistry
 from avicenna.vault.models import AgentDef
+from avicenna.vault.vault import Vault
 
 CHAT_SAFE_TOOLS: tuple[str, ...] = (
     "read_note", "search_vault", "list_notes", "get_related_notes", "validate_tags",
@@ -40,7 +41,7 @@ class ChatError(RuntimeError):
 class AgentChatController:
     def __init__(
         self,
-        vault: Any,
+        vault: Vault,
         provider: LLMProvider,
         bus: EventBus,
         registry: ToolRegistry,

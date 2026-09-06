@@ -38,3 +38,10 @@ include = ["avicenna*"]
 # Three tests in test_providers.py were failing for exactly this reason.
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+# keyring genuinely ships no type stubs (there is no types-keyring on PyPI).
+# This override is scoped to that one package; every other missing import
+# remains an error.
+[[tool.mypy.overrides]]
+module = "keyring.*"
+ignore_missing_imports = true
