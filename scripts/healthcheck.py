@@ -130,20 +130,34 @@ def probe_config(vault_override: str | None) -> ProbeResult:
 # ---------------------------------------------------------------------------
 
 async def probe_provider() -> ProbeResult:
-    """One cheap real call via validate_key. SKIP if no key is configured."""
+    """One cheap real call via validate_key. SKIP if no key is configured.
+
+    Reports pool size and fingerprints when a pool is available. A pool of one
+    is the normal case and must not read as a warning.
+    """
     from avicenna.auth import DEFAULT_MODEL, DEFAULT_PROVIDER, validate_key
     from avicenna.config import Config
+    from avicenna.keypool import load_pool
     from avicenna.secrets import read_api_key
 
-    key = read_api_key(DEFAULT_PROVIDER)
-    if not key:
+    # Try to load a pool for reporting. Fall back to single key check.
+    try:
+        pool = load_pool(DEFAULT_PROVIDER)
+    except RuntimeError:
         return ProbeResult("PROVIDER", Status.SKIP, "no API key configured")
 
     model = Config.load_user_config().get("model", DEFAULT_MODEL)
+    # Validate using the first key from the pool.
+    key = pool._keys[0]
     result = await validate_key(DEFAULT_PROVIDER, key, model)
 
+    fps = pool.fingerprints()
+    count = len(pool)
+    fp_str = ", ".join(fps) if fps else "?"
+
     if result.ok:
-        return ProbeResult("PROVIDER", Status.OK, result.detail)
+        detail = f"{result.detail} / {count} key(s) ({fp_str})"
+        return ProbeResult("PROVIDER", Status.OK, detail)
     return ProbeResult("PROVIDER", Status.FAIL, result.detail)
 
 

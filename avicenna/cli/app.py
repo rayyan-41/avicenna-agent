@@ -244,6 +244,30 @@ def mcp_tools() -> None:
     typer.echo("MCP tools are discovered at run time. Start avicenna and check the welcome sequence.")
 
 
+@app.command("keys")
+def keys_cmd() -> None:
+    """Show the API key pool: size, source, and fingerprints.
+
+    Read-only; never prints key material and does not require a network call.
+    A pool of one is the normal case and does not read as a warning.
+    """
+    from avicenna.keypool import load_pool
+
+    try:
+        pool = load_pool("mistral")
+    except RuntimeError:
+        typer.echo("No API keys configured.")
+        raise typer.Exit(1)
+
+    fps = pool.fingerprints()
+    source = pool._source
+    count = len(pool)
+    fp_str = ", ".join(fps) if fps else "?"
+
+    typer.echo(f"pool: {count} key(s), source: {source}")
+    typer.echo(f"fingerprints: {fp_str}")
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

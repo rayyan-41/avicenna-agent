@@ -2,6 +2,21 @@
 
 Verified against mistralai v2.8.0 (installed 2026-08-02).
 Import path: from mistralai.client import Mistral.
+
+When a KeyPool is provided, each complete() call selects a key via round-robin.
+On RateLimitError with multiple live keys, the provider tries the next key
+immediately instead of sleeping — that is the entire point of a pool. On
+AuthError (401/403), the offending key is quarantined and, if other keys remain
+live, the call retries with the next one. A single-key pool behaves exactly
+like the legacy single-key path: backoff on rate-limit, immediate raise on
+auth failure.
+
+Key rotation and retry have separate budgets.  Within one attempt the provider
+cycles through every live key without sleeping; only once every live key has
+been tried does it sleep and advance to the next attempt.  This prevents a
+burst of rate-limited rotations from exhausting the retry budget in
+milliseconds — exactly what happens when a 40-heading parallel fan-out hits
+the provider simultaneously.
 """
 
 from __future__ import annotations
@@ -10,7 +25,7 @@ import asyncio
 import json
 import random
 import time
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from mistralai.client import Mistral as MistralClient
 from mistralai.client.models import (
@@ -45,12 +60,20 @@ from avicenna.providers.errors import (
     TransientError,
 )
 
+if TYPE_CHECKING:
+    from avicenna.keypool import KeyPool
+
 _MAX_RETRIES = 4
 _BASE_DELAY = 1.0
 
 
 class MistralProvider(LLMProvider):
-    """Mistral completion backend with retry and error mapping."""
+    """Mistral completion backend with retry, error mapping, and key pooling.
+
+    Accepts an optional KeyPool alongside the legacy single api_key. When pooled,
+    each complete() call rotates to the next key. The pool is the caller's
+    responsibility — this class only selects keys and quarantines bad ones.
+    """
 
     name = "mistral"
 
@@ -60,10 +83,25 @@ class MistralProvider(LLMProvider):
         model: str = "mistral-large-latest",
         timeout: float = 120.0,
         max_retries: int = _MAX_RETRIES,
+        pool: KeyPool | None = None,
     ) -> None:
         self._model = model
         self._max_retries = max_retries
-        self._client = MistralClient(api_key=api_key)
+        self._pool = pool
+        # Lazily-built clients, keyed by the API key string. When pooled, each
+        # key gets its own client so we never re-create one in a hot loop.
+        self._clients: dict[str, MistralClient] = {
+            api_key: MistralClient(api_key=api_key)
+        }
+        self._default_key = api_key
+
+    def _get_client(self, api_key: str) -> MistralClient:
+        """Return a cached client for the given key, building one if needed."""
+        client = self._clients.get(api_key)
+        if client is None:
+            client = MistralClient(api_key=api_key)
+            self._clients[api_key] = client
+        return client
 
     async def complete(
         self,
@@ -80,10 +118,29 @@ class MistralProvider(LLMProvider):
         wire_messages += self._to_wire_messages(messages)
         wire_tools = self._to_wire_tools(tools) if tools else None
 
+        # Select the initial key: pool round-robin or the legacy single key.
+        current_key = await self._pool.next() if self._pool else self._default_key
+
         last_exc: Exception | None = None
-        for attempt in range(self._max_retries):
+        attempt = 0
+        # Keys tried during the current attempt.  Cleared on each new attempt.
+        tried_keys: set[str] = {current_key}
+        # Safety bound: even with key rotation the loop cannot spin more than
+        # live_count times per attempt without sleeping.
+        rotation = 0
+        max_rotations = (
+            self._pool.live_count * self._max_retries if self._pool
+            else self._max_retries
+        )
+
+        while attempt < self._max_retries:
+            if rotation >= max_rotations:
+                break
+            rotation += 1
+
+            client = self._get_client(current_key)
             try:
-                response = await self._client.chat.complete_async(
+                response = await client.chat.complete_async(
                     model=self._model,
                     messages=wire_messages,
                     tools=wire_tools,
@@ -92,6 +149,55 @@ class MistralProvider(LLMProvider):
                 )
             except Exception as exc:
                 mapped = self._map_error(exc)
+
+                # Auth failure on a pooled key: quarantine and move to the next
+                # live key without consuming an attempt.  The key is bad; the
+                # attempt did not get a fair shot.  When the pool is exhausted,
+                # raise — there is nothing left to try.
+                if isinstance(mapped, AuthError) and self._pool:
+                    self._pool.quarantine(current_key, str(mapped))
+                    if not self._pool.exhausted:
+                        current_key = await self._pool.next()
+                        tried_keys.add(current_key)
+                        continue
+                    raise mapped
+
+                # Rate limit on a pooled key with more live keys available:
+                # try an untried live key immediately without consuming an
+                # attempt.  Once every live key has been tried, sleep with
+                # backoff and start a fresh rotation.  This is the pool doing
+                # its job — spreading a burst across keys before falling back
+                # to timed retry.
+                if isinstance(mapped, RateLimitError) and self._pool and self._pool.live_count > 1:
+                    rotated = False
+                    for _ in range(self._pool.live_count):
+                        candidate = await self._pool.next()
+                        if candidate not in tried_keys:
+                            current_key = candidate
+                            tried_keys.add(current_key)
+                            rotated = True
+                            break
+                    if rotated:
+                        continue
+                    # Every live key tried in this attempt — sleep and advance.
+                    if attempt >= self._max_retries - 1:
+                        raise mapped
+                    delay = (
+                        mapped.retry_after
+                        if mapped.retry_after is not None
+                        else _BASE_DELAY * (2 ** attempt) + random.uniform(0, 0.5)
+                    )
+                    await asyncio.sleep(delay)
+                    last_exc = mapped
+                    attempt += 1
+                    tried_keys.clear()
+                    rotation = 0
+                    current_key = await self._pool.next()
+                    tried_keys.add(current_key)
+                    continue
+
+                # Single-key path (or pool exhausted): standard retry logic.
+                # This is byte-for-byte identical to the pre-pool behaviour.
                 if not isinstance(mapped, (RateLimitError, TransientError)):
                     raise mapped
                 if attempt == self._max_retries - 1:
@@ -103,6 +209,7 @@ class MistralProvider(LLMProvider):
                 )
                 await asyncio.sleep(delay)
                 last_exc = mapped
+                attempt += 1
                 continue
 
             choice = response.choices[0]
@@ -181,7 +288,7 @@ class MistralProvider(LLMProvider):
         raise last_exc or RuntimeError("unreachable")
 
     async def close(self) -> None:
-        self._client = None  # type: ignore[assignment]
+        self._clients.clear()
 
     # ------------------------------------------------------------------
     # Wire conversion

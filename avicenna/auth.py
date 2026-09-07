@@ -109,23 +109,34 @@ def build_provider() -> Any | None:
     provider by hand with only the env var, ignoring the model the user chose
     during onboarding — which produced 403s on accounts whose tier did not
     include the hardcoded default.
+
+    When an API key pool is available (env var, pool file, or single key), it
+    is passed to the provider so completions rotate across keys.
     """
     import os
 
     from avicenna.config import Config
+    from avicenna.keypool import load_pool
     from avicenna.providers.registry import get_provider
     from avicenna.secrets import read_api_key
 
-    key = read_api_key(DEFAULT_PROVIDER)
-    if not key:
+    # Try to load a pool. If no keys exist at all, return None for onboarding.
+    try:
+        pool = load_pool(DEFAULT_PROVIDER)
+    except RuntimeError:
         return None
+
+    # We need at least one key for the legacy api_key parameter.
+    # The pool always has at least one key if load_pool succeeded.
+    key = pool._keys[0]
+
     # Precedence: env var (if explicitly set) > onboarding choice > default.
     env_model = os.getenv("MISTRAL_MODEL")
     if env_model is not None:
         model = env_model
     else:
         model = Config.load_user_config().get("model", DEFAULT_MODEL)
-    return get_provider(DEFAULT_PROVIDER, api_key=key, model=model)
+    return get_provider(DEFAULT_PROVIDER, api_key=key, model=model, pool=pool)
 
 
 __all__ = [

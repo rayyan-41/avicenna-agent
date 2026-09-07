@@ -152,3 +152,237 @@ async def test_map_error_422_is_bad_request():
     from avicenna.providers.mistral import MistralProvider
 
     assert isinstance(MistralProvider._map_error(_FakeHTTPError(422)), BadRequestError)
+
+
+# ------------------------------------------------------------------
+# R1 — Key rotation does not spend the retry budget
+# ------------------------------------------------------------------
+
+import asyncio
+import random
+from unittest.mock import AsyncMock
+
+from avicenna.keypool import KeyPool
+from avicenna.providers.errors import AuthError, RateLimitError
+
+
+def _rate_limit_exc(retry_after: float | None = None) -> Exception:
+    """Build an SDK-style HTTP exception that maps to RateLimitError."""
+    exc = _FakeHTTPError(429, "rate limited")
+    exc.retry_after = retry_after  # type: ignore[attr-defined]
+    return exc
+
+
+def _auth_exc() -> Exception:
+    """Build an SDK-style HTTP exception that maps to AuthError."""
+    return _FakeHTTPError(401, "unauthorised")
+
+
+def _ok_response() -> object:
+    """Minimal mock of a successful chat completion response."""
+    from unittest.mock import MagicMock
+
+    msg = MagicMock()
+    msg.content = "ok"
+    msg.tool_calls = None
+    choice = MagicMock()
+    choice.finish_reason = "stop"
+    choice.message = msg
+    resp = MagicMock()
+    resp.choices = [choice]
+    resp.usage = MagicMock(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+    return resp
+
+
+async def test_pool_rotation_all_keys_rate_limited(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Three keys, ALL rate-limited: each key tried once per rotation, then sleep.
+
+    With _max_retries=4 and 3 keys the call sequence is:
+      rotation 1: k1(RL), k2(RL), k3(RL) → sleep  → attempt advances (1)
+      rotation 2: k1(RL), k2(RL), k3(RL) → sleep  → attempt advances (2)
+      rotation 3: k1(RL), k2(RL), k3(RL) → sleep  → attempt advances (3)
+      rotation 4: k1(RL), k2(RL), k3(RL) → raise  (attempt 3 was last)
+    12 calls, 3 sleeps.
+    """
+    from avicenna.providers.mistral import MistralProvider
+
+    pool = KeyPool(["k1", "k2", "k3"])
+    provider = MistralProvider(api_key="k1", pool=pool, max_retries=4)
+
+    call_count = 0
+
+    async def fake_complete(*args: object, **kwargs: object) -> object:
+        nonlocal call_count
+        call_count += 1
+        raise _rate_limit_exc()
+
+    def _mock_client(async_fn: object) -> object:
+        return type("C", (), {"chat": type("Chat", (), {"complete_async": async_fn})()})()
+
+    provider._get_client = lambda key: _mock_client(fake_complete)  # type: ignore[return-value]
+
+    sleep_times: list[float] = []
+    async def fake_sleep(delay: float) -> None:
+        sleep_times.append(delay)
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+
+    from avicenna.providers.errors import RateLimitError as RLE
+    with pytest.raises(RLE):
+        await provider.complete(system="s", messages=[])
+
+    assert call_count == 12
+    assert len(sleep_times) == 3
+
+
+async def test_pool_rotation_second_key_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """First key rate-limited, second succeeds: 2 calls, no sleep."""
+    from avicenna.providers.mistral import MistralProvider
+
+    pool = KeyPool(["k1", "k2", "k3"])
+    provider = MistralProvider(api_key="k1", pool=pool, max_retries=4)
+
+    call_count = 0
+
+    async def fake_complete(*args: object, **kwargs: object) -> object:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise _rate_limit_exc()
+        return _ok_response()
+
+    def _mock_client(async_fn: object) -> object:
+        return type("C", (), {"chat": type("Chat", (), {"complete_async": async_fn})()})()
+
+    provider._get_client = lambda key: _mock_client(fake_complete)  # type: ignore[return-value]
+
+    sleep_times: list[float] = []
+    async def fake_sleep(delay: float) -> None:
+        sleep_times.append(delay)
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+
+    result = await provider.complete(system="s", messages=[])
+    assert result.text == "ok"
+    assert call_count == 2
+    assert len(sleep_times) == 0
+
+
+async def test_pool_auth_quarantines_and_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """First key returns 401: quarantined, second key succeeds.  No attempt wasted."""
+    from avicenna.providers.mistral import MistralProvider
+
+    pool = KeyPool(["k1", "k2", "k3"])
+    provider = MistralProvider(api_key="k1", pool=pool, max_retries=4)
+
+    call_count = 0
+
+    async def fake_complete(*args: object, **kwargs: object) -> object:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise _auth_exc()
+        return _ok_response()
+
+    def _mock_client(async_fn: object) -> object:
+        return type("C", (), {"chat": type("Chat", (), {"complete_async": async_fn})()})()
+
+    provider._get_client = lambda key: _mock_client(fake_complete)  # type: ignore[return-value]
+
+    sleep_times: list[float] = []
+    async def fake_sleep(delay: float) -> None:
+        sleep_times.append(delay)
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+
+    result = await provider.complete(system="s", messages=[])
+    assert result.text == "ok"
+    assert call_count == 2
+    assert len(sleep_times) == 0
+    assert "k1" in pool._quarantined
+    assert pool.live_count == 2
+
+
+async def test_single_key_rate_limited_throughout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Single key, all rate-limited: identical call count and sleep pattern to pre-pool behaviour.
+
+    With max_retries=4: 4 calls, 3 sleeps (sleep before attempts 1, 2, 3; raise after 3).
+    """
+    from avicenna.providers.mistral import MistralProvider
+
+    provider = MistralProvider(api_key="only-key", max_retries=4)
+
+    call_count = 0
+
+    async def fake_complete(*args: object, **kwargs: object) -> object:
+        nonlocal call_count
+        call_count += 1
+        raise _rate_limit_exc()
+
+    def _mock_client(async_fn: object) -> object:
+        return type("C", (), {"chat": type("Chat", (), {"complete_async": async_fn})()})()
+
+    provider._get_client = lambda key: _mock_client(fake_complete)  # type: ignore[return-value]
+
+    sleep_times: list[float] = []
+    async def fake_sleep(delay: float) -> None:
+        sleep_times.append(delay)
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+
+    from avicenna.providers.errors import RateLimitError as RLE
+    with pytest.raises(RLE):
+        await provider.complete(system="s", messages=[])
+
+    assert call_count == 4
+    assert len(sleep_times) == 3
+
+
+async def test_pool_auth_exhausted_raises() -> None:
+    """Pool exhausted by auth errors: raise AuthError, no infinite loop."""
+    from avicenna.providers.mistral import MistralProvider
+
+    pool = KeyPool(["k1"])
+    provider = MistralProvider(api_key="k1", pool=pool, max_retries=4)
+
+    async def fake_complete(*args: object, **kwargs: object) -> object:
+        raise _auth_exc()
+
+    def _mock_client(async_fn: object) -> object:
+        return type("C", (), {"chat": type("Chat", (), {"complete_async": async_fn})()})()
+
+    provider._get_client = lambda key: _mock_client(fake_complete)  # type: ignore[return-value]
+
+    with pytest.raises(AuthError):
+        await provider.complete(system="s", messages=[])
+
+
+async def test_redact_applied_at_provider_level(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Provider-level auth error triggers quarantine with redacted reason in logs."""
+    import logging
+    from avicenna.providers.mistral import MistralProvider
+
+    pool = KeyPool(["k1", "k2"])
+    provider = MistralProvider(api_key="k1", pool=pool, max_retries=4)
+
+    call_count = 0
+
+    async def fake_complete(*args: object, **kwargs: object) -> object:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise _FakeHTTPError(401, "token ABCDEFGHJKLMNPQRSTUVWXYza12345678 invalid")
+        return _ok_response()
+
+    def _mock_client(async_fn: object) -> object:
+        return type("C", (), {"chat": type("Chat", (), {"complete_async": async_fn})()})()
+
+    provider._get_client = lambda key: _mock_client(fake_complete)  # type: ignore[return-value]
+
+    async def fake_sleep(delay: float) -> None:
+        pass
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+
+    with caplog.at_level(logging.WARNING, logger="avicenna.keypool"):
+        result = await provider.complete(system="s", messages=[])
+
+    assert result.text == "ok"
+    assert "ABCDEFGHJKLMNPQRSTUVWXYza12345678" not in caplog.text

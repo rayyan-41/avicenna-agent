@@ -89,8 +89,14 @@ def test_fresh_install_reports_unconfigured(
     assert status["model"] == auth.DEFAULT_MODEL
 
 
-def test_unconfigured_install_has_no_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_unconfigured_install_has_no_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No key from any source means build_provider returns None."""
+    monkeypatch.delenv("MISTRAL_API_KEYS", raising=False)
     monkeypatch.setattr("avicenna.secrets.read_api_key", lambda provider="mistral": None)
+    # Redirect home so the real pool file is not found.
+    monkeypatch.setattr("avicenna.keypool.Path.home", lambda: tmp_path)
     assert auth.build_provider() is None
 
 
