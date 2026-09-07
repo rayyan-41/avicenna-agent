@@ -995,6 +995,10 @@ export class App {
         );
         return;
 
+      case 'SchemaDetected':
+        this.write(`frontmatter schema: ${list('keys').join(', ')} (source: ${str('source')})`);
+        return;
+
       case 'LinkCandidatesFound':
         this.write(`${num('count')} link candidates found`);
         return;

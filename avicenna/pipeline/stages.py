@@ -10,9 +10,10 @@ from typing import Any
 
 from avicenna.events import (
     LinkCandidatesFound, LogMessage, ManifestWritten, MocUpdated,
-    NoteWritten, PreflightDeclared, Stage, TagsProposed,
+    NoteWritten, PreflightDeclared, SchemaDetected, Stage, TagsProposed,
     TagsValidated, WordCountChecked,
 )
+from avicenna.pipeline.schema import FrontmatterSchema, detect_frontmatter_schema
 from avicenna.pipeline.context import RunContext
 from avicenna.pipeline.delegate import delegate
 from avicenna.pipeline.preflight import (
@@ -263,15 +264,39 @@ def _quote_yaml_scalar(value: str) -> str:
 
 
 def build_frontmatter(ctx: RunContext, tags: list[str] | None = None) -> str:
-    """The canonical frontmatter block for this run."""
-    return (
-        "---\n"
-        f"title: {_quote_yaml_scalar(ctx.spec.topic)}\n"
-        f"domain: {_quote_yaml_scalar(ctx.domain or 'general')}\n"
-        f"template: {_quote_yaml_scalar(ctx.template or 'general')}\n"
-        f"tags: {_render_tags(tags or [])}\n"
-        "---\n"
-    )
+    """The canonical frontmatter block for this run.
+
+    Uses the detected schema when available so the note matches the vault's
+    own convention.  Falls back to the scaffold schema only when the vault
+    has no notes to learn from.
+    """
+    schema = ctx.frontmatter_schema
+    lines = ["---"]
+    if schema and schema.keys:
+        value_map: dict[str, str] = {}
+        value_map["tags"] = _render_tags(tags or [])
+        value_map["title"] = ctx.spec.topic
+        value_map["domain"] = ctx.domain or "general"
+        value_map["template"] = ctx.template or "general"
+        for k in schema.keys:
+            if k == "tags":
+                # tags is a YAML flow sequence ([a, b]) and must not be
+                # quoted — _quote_yaml_scalar would wrap the brackets in
+                # double quotes, turning the list into a plain string.
+                lines.append(f"tags: {value_map['tags']}")
+            elif k in value_map:
+                lines.append(f"{k}: {_quote_yaml_scalar(value_map[k])}")
+            elif k in schema.defaults:
+                lines.append(f"{k}: {_quote_yaml_scalar(schema.defaults[k])}")
+            # Keys with no value and no default are omitted — the harness
+            # does not invent content for a key just to fill it.
+    else:
+        lines.append(f"title: {_quote_yaml_scalar(ctx.spec.topic)}")
+        lines.append(f"domain: {_quote_yaml_scalar(ctx.domain or 'general')}")
+        lines.append(f"template: {_quote_yaml_scalar(ctx.template or 'general')}")
+        lines.append(f"tags: {_render_tags(tags or [])}")
+    lines.append("---")
+    return "\n".join(lines) + "\n"
 
 
 # --- duplicate-frontmatter-in-fence ----------------------------------------
@@ -669,6 +694,16 @@ class ManifestStage(PipelineStage):
     id = "manifest"
 
     async def run(self, ctx: RunContext) -> None:
+        # Detect the frontmatter schema before any note is written so every
+        # stage writes the same convention.  Cached on ctx for the run.
+        if ctx.frontmatter_schema is None:
+            schema = detect_frontmatter_schema(
+                ctx.spec.vault.root, domain=ctx.domain,
+            )
+            ctx.frontmatter_schema = schema
+            await ctx.emit(
+                SchemaDetected, keys=schema.keys, source=schema.source,
+            )
         assert ctx.slug is not None
         expected = len(ctx.headings)
         if ctx.spec.vault.tools.has("write_manifest"):

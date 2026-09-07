@@ -50,6 +50,7 @@ export type EventName =
   | 'WordCountChecked'
   | 'TagsProposed'
   | 'TagsValidated'
+  | 'SchemaDetected'
   | 'LinkCandidatesFound'
   | 'MocUpdated'
   | 'NoteWritten'

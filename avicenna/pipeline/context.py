@@ -13,6 +13,7 @@ from typing import Any, TypeVar
 
 from avicenna.bus import EventBus
 from avicenna.events import Event
+from avicenna.pipeline.schema import FrontmatterSchema
 from avicenna.providers.base import LLMProvider
 from avicenna.vault.vault import Vault
 from avicenna.vault.models import AgentDef
@@ -68,6 +69,9 @@ class RunContext:
     #: Pre-flight keys off this to avoid re-declaring a structure that already
     #: has chunks on disk under a slug it would not mint again.
     resumed_from_manifest: bool = False
+    #: Detected frontmatter schema for this run, cached so every stage writes
+    #: the same convention.  Set once by AssemblyStage before the first write.
+    frontmatter_schema: FrontmatterSchema | None = None
 
     @property
     def tmp_dir(self) -> Path:

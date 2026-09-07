@@ -264,8 +264,9 @@ async def probe_provider() -> ProbeResult:
 
 def probe_vault(vault_path: Path) -> ProbeResult:
     """Vault.load succeeds; report agent counts by type, skill count,
-    taxonomy domain count. FAIL if any content agent declares a domain not in
-    taxonomy.json."""
+    taxonomy domain count, and the detected frontmatter schema.  FAIL if any
+    content agent declares a domain not in taxonomy.json."""
+    from avicenna.pipeline.schema import detect_frontmatter_schema
     from avicenna.vault.models import VaultConfigError
     from avicenna.vault.vault import Vault
 
@@ -298,6 +299,12 @@ def probe_vault(vault_path: Path) -> ProbeResult:
         details.append(
             f"excluded from derivation: {', '.join(v.taxonomy.exclude_from_derivation)}"
         )
+
+    # Frontmatter schema detection
+    schema = detect_frontmatter_schema(vault_path)
+    details.append(
+        f"frontmatter schema: {' / '.join(schema.keys)} (source: {schema.source})"
+    )
 
     summary = (f"{len(v.agents)} agents, {len(v.skills)} skills, "
                f"{len(v.taxonomy.domains)} domains")

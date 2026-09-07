@@ -120,6 +120,12 @@ class TagsValidated(Event):
 
 
 @dataclass(frozen=True)
+class SchemaDetected(Event):
+    keys: tuple[str, ...] = ()
+    source: str = ""
+
+
+@dataclass(frozen=True)
 class LinkCandidatesFound(Event):
     count: int = 0
     sample: tuple[str, ...] = ()
@@ -160,6 +166,6 @@ __all__ = [
     "Stage", "Event", "RunStarted", "PreflightDeclared", "ManifestWritten",
     "SectionStarted", "SectionCompleted", "SectionFailed", "StageEntered",
     "StageCompleted", "ToolInvoked", "ToolReturned", "WordCountChecked",
-    "TagsProposed", "TagsValidated", "LinkCandidatesFound", "MocUpdated",
-    "NoteWritten", "RunFailed", "RunComplete", "LogMessage",
+    "TagsProposed", "TagsValidated", "SchemaDetected", "LinkCandidatesFound",
+    "MocUpdated", "NoteWritten", "RunFailed", "RunComplete", "LogMessage",
 ]
