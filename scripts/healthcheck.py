@@ -130,35 +130,81 @@ def probe_config(vault_override: str | None) -> ProbeResult:
 # ---------------------------------------------------------------------------
 
 async def probe_provider() -> ProbeResult:
-    """One cheap real call via validate_key. SKIP if no key is configured.
+    """Validate every key in the pool concurrently. SKIP if no key is
+    configured.
 
-    Reports pool size and fingerprints when a pool is available. A pool of one
-    is the normal case and must not read as a warning.
+    Each key is validated independently (cheap real call via validate_key).
+    Results are reported by fingerprint — never key material, never a prefix.
+    The pool source (env / file / single / file+single) is included so a user
+    can tell where a bad key came from.
+
+    Verdict:
+      - every key valid        -> PASS ("4/4 keys valid")
+      - some valid, some not   -> WARN (failing fingerprints named, told they
+                                  will be quarantined at runtime, with a
+                                  concrete instruction to remove them from the
+                                  pool file)
+      - no key valid           -> FAIL
+      - no keys configured     -> SKIP (unchanged)
     """
     from avicenna.auth import DEFAULT_MODEL, DEFAULT_PROVIDER, validate_key
     from avicenna.config import Config
     from avicenna.keypool import load_pool
-    from avicenna.secrets import read_api_key
 
-    # Try to load a pool for reporting. Fall back to single key check.
+    # Try to load a pool. SKIP when no key is configured at all.
     try:
         pool = load_pool(DEFAULT_PROVIDER)
     except RuntimeError:
         return ProbeResult("PROVIDER", Status.SKIP, "no API key configured")
 
     model = Config.load_user_config().get("model", DEFAULT_MODEL)
-    # Validate using the first key from the pool.
-    key = pool._keys[0]
-    result = await validate_key(DEFAULT_PROVIDER, key, model)
-
+    keys = list(pool._keys)
     fps = pool.fingerprints()
-    count = len(pool)
-    fp_str = ", ".join(fps) if fps else "?"
+    fp_by_key: dict[str, str] = dict(zip(keys, fps))
+    source = pool.source
 
-    if result.ok:
-        detail = f"{result.detail} / {count} key(s) ({fp_str})"
+    # Validate every key concurrently — they are independent network calls.
+    async def _check(key: str) -> tuple[str, bool, str]:
+        fp = fp_by_key[key]
+        result = await validate_key(DEFAULT_PROVIDER, key, model)
+        return fp, result.ok, result.detail
+
+    results_list = await asyncio.gather(*[_check(k) for k in keys])
+
+    ok_fps: list[str] = []
+    fail_lines: list[str] = []
+    for fp, ok, detail in results_list:
+        if ok:
+            ok_fps.append(fp)
+        else:
+            fail_lines.append(f"{fp}: {detail}")
+
+    count = len(keys)
+    good = len(ok_fps)
+
+    if good == count:
+        # Every key validated.
+        detail = f"{count}/{count} keys valid (source={source})"
         return ProbeResult("PROVIDER", Status.OK, detail)
-    return ProbeResult("PROVIDER", Status.FAIL, result.detail)
+
+    if good == 0:
+        # No key works.
+        detail = f"0/{count} keys valid (source={source})"
+        return ProbeResult("PROVIDER", Status.FAIL, detail, fail_lines)
+
+    # Mixed — some good, some bad.  WARN: the bad keys will be quarantined at
+    # runtime, but the user can proactively remove them from the pool file.
+    details: list[str] = []
+    details.extend(fail_lines)
+    # Only suggest pool-file removal when keys actually came from the file.
+    if source in ("file", "file+single"):
+        pool_path = str(Path.home() / ".avicenna" / "api_keys_pool")
+        details.append(
+            "Remove the failing keys from " + pool_path
+            + " to suppress this warning."
+        )
+    summary = f"{good}/{count} keys valid; {count - good} will be quarantined (source={source})"
+    return ProbeResult("PROVIDER", Status.WARN, summary, details)
 
 
 # ---------------------------------------------------------------------------

@@ -23,6 +23,7 @@ from avicenna.pipeline.sections import generate_sections
 from avicenna.pipeline.toolcall import invoke_tool
 from avicenna.tools.base import ToolResult
 from avicenna.vault.routing import classify_domain, route_request, validate_domain
+from avicenna.vault.vault import Vault
 
 
 # --- graceful degradation ---------------------------------------------------
@@ -43,11 +44,43 @@ def _safe_filename(title: str) -> str:
     return (cleaned or "Untitled")[:120] + ".md"
 
 
+# --- domain directory resolution ---------------------------------------------
+# Two places derive a vault path from `ctx.domain` and they used to disagree.
+# `_note_destination` applied `.replace("-", " ").title()` (yielding "Reason")
+# while `MocStage` passed the raw `ctx.domain` (yielding "reason") to
+# update_moc.ps1, which built filenames and directory paths from it. On Windows
+# the case mismatch was invisible (one file), but git tracked "Reason/Map of
+# Contents - Reason.md" and "Reason/Map of Contents - reason.md" as distinct
+# paths — and on a case-sensitive filesystem a second, competing MOC and domain
+# directory would appear beside the real one.  A single helper now resolves the
+# canonical directory for both call sites.
+
+def _canonical_domain_dir(vault: Vault, domain: str) -> Path:
+    """Resolve the vault's canonical directory name for *domain*.
+
+    If a directory at the vault root already matches *domain*
+    case-insensitively (tolerating ``"-"`` vs ``" "``), return THAT
+    directory — canonical by construction, correct on any filesystem.
+
+    When no such directory exists, fall back to Title Case so a scaffolded
+    vault works on its first run.
+    """
+    norm = domain.replace("-", " ").lower()
+    for child in vault.root.iterdir():
+        if child.is_dir() and child.name.replace("-", " ").lower() == norm:
+            return child
+    return vault.root / domain.replace("-", " ").title()
+
+
 def _note_destination(ctx: RunContext) -> Path:
     """Where the finished note belongs in the vault.
 
     Domain folders are Title Case at the vault root (Art/, History/, ...).
     Created if absent so a scaffolded vault works on its first run.
+
+    Uses `_canonical_domain_dir` so that a domain like "reason" resolves to
+    an existing "Reason/" directory rather than creating a second, differently
+    cased one.
 
     Never returns a path that already holds a note. The destination derives
     from the topic alone, so running the same topic twice — or two topics that
@@ -55,8 +88,7 @@ def _note_destination(ctx: RunContext) -> Path:
     out of existence with no event and no backup. Losing a note in the right
     vault is the same class of failure as writing into the wrong one.
     """
-    domain = (ctx.domain or "general").replace("-", " ").title()
-    folder = ctx.spec.vault.root / domain
+    folder = _canonical_domain_dir(ctx.spec.vault, ctx.domain or "general")
     folder.mkdir(parents=True, exist_ok=True)
 
     candidate = folder / _safe_filename(ctx.spec.topic)
@@ -710,6 +742,27 @@ def extract_tag_line(output: str) -> str:
 
 
 class TaggingStage(PipelineStage):
+    # --- tagging floor -------------------------------------------------------
+    # Three defects in the old tagger:
+    #
+    # 1. Retries re-sent the same prompt plus the raw validator error, asking
+    #    the model to guess from a closed vocabulary it was never shown.
+    #    Now attempts 2-3 inject the actual valid options from the vault
+    #    taxonomy for the routed domain.
+    #
+    # 2. After three failures the pipeline continued with `tags: []`, which
+    #    orphaned the note permanently: update_moc.ps1 skips notes with fewer
+    #    than 2 tags (the note never enters its MOC), and get_related_notes
+    #    returns 0 candidates (which is why the linker invented notes that do
+    #    not exist). Now a minimal valid array is constructed from the taxonomy
+    #    and passed through validate_tags like any other candidate.
+    #
+    # 3. Even the constructed array can fail if the taxonomy is malformed or
+    #    validate_tags has a stricter rule. In that case we fall through to
+    #    today's empty-tags behaviour, but LinkingStage now refuses to ask a
+    #    model to weave links against 0 candidates — that was the direct cause
+    #    of the invented wikilinks.
+
     name: Stage = "tagging"
     id = "tagging"
 
@@ -722,12 +775,17 @@ class TaggingStage(PipelineStage):
             retry_detail = ""
             if attempt > 1 and ctx.handoffs.get("tagger_errors"):
                 retry_detail = f"\nPrevious validation errors: {ctx.handoffs['tagger_errors']}"
+            # On attempts 2-3, inject the actual valid options so the model is
+            # not asked to guess from a closed vocabulary it was never shown.
+            taxonomy_hint = ""
+            if attempt > 1:
+                taxonomy_hint = _taxonomy_hint(ctx)
             tagger_payload = (
                 f"Note path: {ctx.note_path}\n"
                 "Reply with the tags on a single line beginning with 'TAGS:', "
                 "comma-separated, drawn only from the vault taxonomy.\n"
                 "Example:\nTAGS: philosophy, epistemology, revelation\n"
-                f"{retry_detail}"
+                f"{taxonomy_hint}{retry_detail}"
             )
             try:
                 tagger_output = await delegate(ctx, "tagger", tagger_payload)
@@ -764,8 +822,94 @@ class TaggingStage(PipelineStage):
                     str(result.parsed.captures.get("reasons", token)) if result.parsed else token
                 )
                 await ctx.emit(TagsValidated, verdict="fail", message=ctx.handoffs["tagger_errors"])
+        # --- deterministic floor: construct a minimal valid tag array ---------
         if not ctx.tags:
-            await ctx.emit(LogMessage, level="error", text="TAGGER_UNRESOLVED after 3 attempts")
+            floor = _build_floor_tags(ctx)
+            if floor:
+                floor_line = ", ".join(floor)
+                result = await _invoke_optional(ctx, "validate_tags", TagLine=floor_line)
+                if result is None:
+                    ctx.tags = floor
+                    await ctx.emit(TagsValidated, verdict="pass",
+                                   message="accepted floor tags unvalidated (validate_tags absent)",
+                                   accepted=tuple(ctx.tags))
+                    await ctx.emit(LogMessage, level="warning",
+                                   text="TAGGER_UNRESOLVED: tags assigned mechanically from taxonomy (validate_tags absent)")
+                elif result.parsed and result.parsed.token == "PASS":
+                    ctx.tags = floor
+                    await ctx.emit(TagsValidated, verdict="pass",
+                                   message="accepted floor tags (mechanical assignment)",
+                                   accepted=tuple(ctx.tags))
+                    await ctx.emit(LogMessage, level="warning",
+                                   text="TAGGER_UNRESOLVED after 3 attempts: tags assigned mechanically from taxonomy; correct this note")
+                else:
+                    await ctx.emit(LogMessage, level="error",
+                                   text="TAGGER_UNRESOLVED after 3 attempts; floor tags also failed validation")
+            else:
+                await ctx.emit(LogMessage, level="error",
+                               text="TAGGER_UNRESOLVED after 3 attempts; cannot build floor tags (taxonomy incomplete)")
+
+
+def _taxonomy_hint(ctx: RunContext) -> str:
+    """Build a taxonomy options hint for constrained tagger retries.
+
+    Reads from the vault's taxonomy.json (never hardcoded) so each vault's
+    own vocabulary is what the tagger sees.
+    """
+    taxonomy = getattr(ctx.spec.vault, "taxonomy", None)
+    if taxonomy is None or not ctx.domain:
+        return ""
+    try:
+        categories = taxonomy.categories_for(ctx.domain)
+    except Exception:
+        categories = []
+    types = list(taxonomy.types) if hasattr(taxonomy, "types") else []
+    themes = list(taxonomy.themes) if hasattr(taxonomy, "themes") else []
+    lines = [
+        f"\nValid tags for the routed domain ({ctx.domain}):",
+        f"  Domain (exactly 1): {ctx.domain}",
+        f"  Category (exactly 1): {', '.join(categories)}" if categories else "  Category: (none available)",
+        f"  Type (exactly 1): {', '.join(types)}" if types else "  Type: (none available)",
+        f"  Themes (1-3): {', '.join(themes)}" if themes else "  Themes: (none available)",
+        "  Entities (0-6): open vocabulary",
+        "  cli must be the last tag.",
+        "The positional order is: domain, category, type, themes..., entities..., cli\n",
+    ]
+    return "\n".join(lines)
+
+
+def _build_floor_tags(ctx: RunContext) -> list[str]:
+    """Construct a minimal valid tag array from the vault taxonomy.
+
+    Returns [] when the taxonomy lacks the information needed to build one.
+    The array follows the positional contract: [domain, category, type,
+    themes..., cli]. Never invents values — everything is drawn from the
+    taxonomy.
+    """
+    taxonomy = getattr(ctx.spec.vault, "taxonomy", None)
+    if taxonomy is None or not ctx.domain:
+        return []
+    try:
+        categories = taxonomy.categories_for(ctx.domain)
+    except Exception:
+        categories = []
+    if not categories:
+        return []
+    types = list(taxonomy.types) if hasattr(taxonomy, "types") else []
+    if not types:
+        return []
+    themes = list(taxonomy.themes) if hasattr(taxonomy, "themes") else []
+    markers = taxonomy.markers if hasattr(taxonomy, "markers") else ["cli"]
+
+    # Prefer a general/universal category over the alphabetically first.
+    universal = set(getattr(taxonomy, "universal_categories", []))
+    category = next((c for c in categories if c in universal), categories[0])
+
+    floor: list[str] = [ctx.domain, category, types[0]]
+    if themes:
+        floor.append(themes[0])
+    floor.extend(markers)
+    return floor
 
 
 class TagsWrittenStage(PipelineStage):
@@ -827,6 +971,9 @@ class FormatterStage(PipelineStage):
 
 
 class LinkingStage(PipelineStage):
+    # When get_related_notes yields 0 candidates, the linker was asked to weave
+    # links against an empty candidate list and invented notes that do not exist.
+    # Now we skip the model call entirely and warn the user.
     name: Stage = "linking"
     id = "linking"
 
@@ -846,6 +993,12 @@ class LinkingStage(PipelineStage):
             )
             related = (result.stdout or "").strip() if result is not None else ""
             await ctx.emit(LinkCandidatesFound, count=count, sample=())
+            if result is not None and count == 0:
+                await ctx.emit(
+                    LogMessage, level="warning",
+                    text="0 link candidates found; skipping linker to avoid invented wikilinks",
+                )
+                return
             note = ctx.note_path.read_text(encoding="utf-8", errors="replace")
             payload = (
                 f"Note path: {ctx.note_path}\n"
@@ -878,8 +1031,13 @@ class MocStage(PipelineStage):
 
     async def run(self, ctx: RunContext) -> None:
         assert ctx.domain is not None
+        # Pass the vault's canonical directory name (not ctx.domain) so
+        # update_moc.ps1 builds the filename and directory path from the
+        # vault's own casing. ctx.domain is the lowercase taxonomy key; the
+        # filesystem name may differ (Reason/ not reason/).
+        domain_dir = _canonical_domain_dir(ctx.spec.vault, ctx.domain)
         result = await _invoke_optional(ctx, "update_moc",
-            Domain=ctx.domain,
+            Domain=domain_dir.name,
             NoteTitle=ctx.spec.topic,
             NoteFilename=ctx.note_path.name if ctx.note_path else "",
         )
