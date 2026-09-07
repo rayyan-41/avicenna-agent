@@ -40,6 +40,9 @@ class RunSpec:
     fresh: bool = True
     domain_override: str | None = None
     template_override: str | None = None
+    #: Per-run settings overrides (from CLI flags).  Passed to the settings
+    #: resolver so flag > env > vault config > default holds uniformly.
+    overrides: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

@@ -105,6 +105,9 @@ def note_cmd(
     dry_run: bool = typer.Option(False, "--dry-run"),
     resume: bool = typer.Option(False, "--resume"),
     concurrency: int = typer.Option(3, "--concurrency"),
+    words_per_heading: Optional[int] = typer.Option(
+        None, "--words-per-heading",
+        help="Per-heading word count target (default: 1000 from vault config)"),
 ) -> None:
     """Generate a note from a topic."""
     from avicenna.auth import build_provider
@@ -137,11 +140,16 @@ def note_cmd(
         )
         raise typer.Exit(1)
 
+    overrides: dict[str, object] = {}
+    if words_per_heading is not None:
+        overrides["words_per_heading"] = words_per_heading
+
     asyncio.run(execute_run(
         topic, provider, bound_vault,
         dry_run=dry_run, concurrency=concurrency,
         resume=resume, fresh=not resume,
         domain_override=hint_domain,
+        overrides=overrides,
     ))
     typer.echo("Done.")
 

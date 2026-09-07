@@ -18,6 +18,7 @@ from avicenna.events import SectionCompleted, SectionFailed, SectionStarted
 from avicenna.pipeline.context import RunContext
 from avicenna.pipeline.delegate import tools_for_agent
 from avicenna.session import one_shot
+from avicenna.settings import load_vault_config, resolve_words_per_heading
 
 SECTION_PROMPT = """You are writing ONE section of a longer note titled "{topic}".
 
@@ -68,10 +69,16 @@ def _build_task(ctx: RunContext, index: int, heading: str) -> Callable[[], Await
     # to be the one delegation given no tools at all.
     section_tools = tools_for_agent(spec.vault, agent)
     outline = "\n".join(f"{i}. {h}" for i, h in enumerate(ctx.headings, start=1))
+    vault_cfg = load_vault_config(Path(spec.vault.root) if spec.vault else None)
+    wph = resolve_words_per_heading(
+        template=ctx.template,
+        overrides=spec.overrides,
+        vault_config=vault_cfg,
+    )
     prompt = SECTION_PROMPT.format(
         topic=spec.topic, heading=heading, index=index, total=len(ctx.headings),
         outline=outline,
-        words=max(600, ctx.target_words // max(1, len(ctx.headings))),
+        words=wph,
         domain=ctx.domain,
     )
 

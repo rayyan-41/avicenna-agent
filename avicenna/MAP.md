@@ -25,6 +25,7 @@
 | `keypool.py` | 291 | API key pool for spreading parallel completions across multiple keys. Round-robin rotation with quarantine for definitively-bad keys (401/403). Provider-scoped pool file format: bare keys (default provider), inline prefix (`provider: key`), and section headers (`[provider]`). Precedence: `{PROVIDER}_API_KEYS` env var, pool file filtered to the requested provider, single key from secrets. `load_pool_file()` exposes the full parsed structure for the healthcheck; `is_provider_registered()` checks whether a provider has an implementation. |
 | `secrets.py` | 62 | API key read/write/redact. Precedence: env var, OS keyring, `user_config.json` file fallback. Write prefers keyring and tells the caller where the key landed ("keyring" or "file") so the frontend can be honest about protection. |
 | `session.py` | 118 | The two runtime primitives. `Session` owns a message list and the tool-resolution loop (up to 8 iterations) on top of the stateless provider ABC. `one_shot` is `SPAWN_SECTION`: builds a Session, sends one prompt, returns the text, discards the context. This is what gives every heading a fresh context — the mechanism behind AGENTS.md §2.1. |
+| `settings.py` | 106 | Minimal settings resolver for `words_per_heading` and timeouts. Precedence chain: CLI flag > env var > vault `.agents/config.json` > built-in default. Per-template overrides live in vault scope. |
 <!-- map:files:end -->
 
 ## Subpackages

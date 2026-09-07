@@ -282,9 +282,11 @@ def load_pool(provider: str = DEFAULT_PROVIDER) -> KeyPool:
 
     # No key at all — return an empty-ish pool that will fail on next().
     # Callers should check for None before using.
+    pool_path = Path.home() / ".avicenna" / "api_keys_pool"
     raise RuntimeError(
-        f"no API keys found for {provider!r}; set {env_name}, "
-        f"create ~/.avicenna/api_keys_pool, or configure a single key"
+        f"no API keys found for {provider!r}; set {env_name} env var, "
+        f"or add the following line to {pool_path}:\n"
+        f"    {provider}: <your-api-key>"
     )
 
 

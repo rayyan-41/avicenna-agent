@@ -845,6 +845,67 @@ def probe_routing(vault_path: Path) -> ProbeResult:
 
 
 # ---------------------------------------------------------------------------
+# Probe 9: EMBEDDING
+# ---------------------------------------------------------------------------
+
+async def probe_embedding() -> ProbeResult:
+    """Report the configured embedding provider, model, dimensions, and whether
+    a live one-token embed succeeds.  SKIP when no embedding provider is
+    configured — a vault that does no linking is legitimate.  Never print key
+    material; use the sha256 fingerprints KeyPool already provides."""
+    from avicenna.config import Config
+    from avicenna.keypool import load_pool
+
+    user_cfg = Config.load_user_config()
+    provider_name = user_cfg.get("embedding_provider", "google")
+    model = user_cfg.get("embedding_model", "models/gemini-embedding-2")
+    dimensions = int(user_cfg.get("embedding_dimensions", 768))
+
+    details: list[str] = []
+    details.append(f"provider: {provider_name}")
+    details.append(f"model: {model}")
+    details.append(f"dimensions: {dimensions}")
+
+    # Try to load the key pool.
+    try:
+        pool = load_pool(provider_name)
+    except RuntimeError:
+        return ProbeResult("EMBEDDING", Status.SKIP,
+                           f"no API keys configured for {provider_name}",
+                           details)
+
+    fps = pool.fingerprints()
+    details.append(f"keys: {len(fps)} ({', '.join(fps)})")
+
+    # Build the provider and try a one-token embed.
+    try:
+        from avicenna.providers.registry import get_embedding_provider
+        key = await pool.next()
+        ep = get_embedding_provider(
+            provider_name, api_key=key, dimensions=dimensions,
+        )
+    except ValueError as exc:
+        return ProbeResult("EMBEDDING", Status.SKIP,
+                           f"embedding provider not available: {exc}", details)
+    except Exception as exc:
+        return ProbeResult("EMBEDDING", Status.FAIL,
+                           f"could not construct provider: {exc}", details)
+
+    try:
+        vec = await asyncio.wait_for(ep.embed_one("healthcheck"), timeout=30.0)
+        actual_dims = len(vec)
+        details.append(f"live embed: OK ({actual_dims} dimensions)")
+        summary = f"{provider_name} / {model} / {actual_dims}d — live probe passed"
+        return ProbeResult("EMBEDDING", Status.OK, summary, details)
+    except Exception as exc:
+        details.append(f"live embed: FAILED — {exc}")
+        summary = f"{provider_name} / {model} / {dimensions}d — live probe failed"
+        return ProbeResult("EMBEDDING", Status.WARN, summary, details)
+    finally:
+        await ep.close()
+
+
+# ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
 
@@ -912,7 +973,14 @@ async def run_all_probes(vault_override: str | None = None) -> list[ProbeResult]
         results.append(await probe_bridge(vault_path))
     except Exception as exc:
         results.append(ProbeResult("BRIDGE", Status.FAIL,
-                                   f"unexpected: {exc}"))
+                                    f"unexpected: {exc}"))
+
+    # Probe 9: EMBEDDING
+    try:
+        results.append(await probe_embedding())
+    except Exception as exc:
+        results.append(ProbeResult("EMBEDDING", Status.FAIL,
+                                    f"unexpected: {exc}"))
 
     return results
 

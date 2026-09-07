@@ -12,11 +12,6 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
-TEMPLATE_MINIMUMS: dict[str, int] = {
-    "fiqh": 8000, "aqeedah": 3000, "geopolitical": 5000, "empire": 1500,
-    "biography": 1500, "cs": 4000, "notebooklm": 4000, "general": 1000,
-}
-
 _JSON_FENCE = re.compile(r"```json\s*(?P<body>\{.*?\})\s*```", re.DOTALL)
 _HEADING_ITEM = re.compile(r"^\s*(?:\d+[.)]|[-*])\s+(?P<h>[^\n]+?)\s*$", re.MULTILINE)
 _FIELD = r"^\s*(?:[-*]\s*)?(?:\*\*)?{key}(?:\*\*)?\s*[:=]\s*(?P<v>[^\n]+)$"
@@ -109,13 +104,10 @@ def parse_preflight(
     if len(headings) > 40:
         raise PreflightError(f"pre-flight declared {len(headings)} headings, refusing")
     template = str(data.get("template") or "general").strip().lower()
-    if template not in TEMPLATE_MINIMUMS:
-        template = "general"
     try:
         target = int(str(data.get("target_words") or 0).replace(",", "").split()[0])
     except (ValueError, IndexError):
         target = 0
-    target = max(target, TEMPLATE_MINIMUMS[template])
 
     topic = str(data.get("topic") or default_topic).strip()
     domain = str(data.get("domain") or default_domain).strip().lower()

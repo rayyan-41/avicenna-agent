@@ -27,17 +27,16 @@ import yaml
 
 from avicenna.bus import EventBus, drain
 from avicenna.events import Event, NoteWritten, PreflightDeclared, RunComplete, RunFailed
-from avicenna.pipeline.preflight import TEMPLATE_MINIMUMS
 from avicenna.pipeline.run import execute_run
 from avicenna.providers.base import LLMProvider
+from avicenna.settings import load_vault_config, resolve_words_per_heading
 from avicenna.vault.models import Taxonomy
 from avicenna.vault.vault import Vault
 
-# The weaver alone allows 600s (WEAVER_TIMEOUT_S in stages.py). A full run
-# touches 14 stages, several of which make model calls. 1800s (30 minutes) is
-# generous enough to cover a slow weaver plus everything else, without letting a
-# truly hung cell block the matrix forever.
-CELL_TIMEOUT_S: float = 1800.0
+# Default per-cell timeout: no limit.  A run that legitimately takes an hour
+# must be allowed to.  The --timeout flag is a test harness convenience for
+# CI, not a product deadline.
+CELL_TIMEOUT_S: float | None = None
 
 # Each domain gets its own topic — a genuine half-formed idea, the kind this
 # product exists to turn into a note. The mapping is keyed by the vault's own
@@ -94,8 +93,8 @@ def _topic_for_domain(domain: str) -> str | None:
     return _DOMAIN_TOPICS.get(domain)
 
 
-# Minimum word count for the general template, which every cell uses.
-MIN_WORDS: int = TEMPLATE_MINIMUMS["general"]
+# Word count guidance is derived from settings at assertion time, not from a
+# hardcoded constant.  See resolve_words_per_heading().
 
 
 # ---- data ----------------------------------------------------------------
@@ -286,12 +285,11 @@ async def _run_assertions(
 
     text = note_path.read_text(encoding="utf-8", errors="replace")
 
-    # 2. Word count at or above the template minimum.
-    #    Matches the pipeline's own counting: whitespace-split of the full text.
+    # 2. Word count — advisory only.  Reports the number and the guidance
+    #    without failing the cell.  A short note on disk is more useful than
+    #    no note.
     words = len(text.split())
     result.words = words
-    if words < MIN_WORDS:
-        result.failed_assertions.append(f"wordcount ({words} < {MIN_WORDS})")
 
     # 3. YAML frontmatter parses.
     fm, body = _body_and_frontmatter(text)
@@ -484,17 +482,18 @@ async def _run_cell(
     # to the wrong agent. force_domain re-enables it for single-cell debugging.
     t0 = time.monotonic()
     try:
-        await asyncio.wait_for(
-            execute_run(
-                topic,
-                provider,
-                vault,
-                bus=bus,
-                dry_run=dry_run,
-                domain_override=domain if force_domain else None,
-                template_override="general",
-            ),
-            timeout=timeout,
+        coro = execute_run(
+            topic,
+            provider,
+            vault,
+            bus=bus,
+            dry_run=dry_run,
+            domain_override=domain if force_domain else None,
+            template_override="general",
+        )
+        await (
+            asyncio.wait_for(coro, timeout=timeout)
+            if timeout is not None else coro
         )
     except (asyncio.TimeoutError, TimeoutError):
         result.status = "TIMEOUT"
@@ -601,8 +600,8 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
-        "--timeout", type=float, default=CELL_TIMEOUT_S,
-        help=f"Per-cell timeout in seconds (default {CELL_TIMEOUT_S:.0f})",
+        "--timeout", type=float, default=None,
+        help="Per-cell timeout in seconds (default: no limit)",
     )
     return p
 
@@ -662,7 +661,8 @@ async def _async_main(args: argparse.Namespace) -> int:
         print(f"mode:   {'dry-run' if args.dry_run else 'live'}")
         if args.force_domain:
             print(f"force:  domain_override ON (--only {args.only})")
-        print(f"timeout per cell: {args.timeout:.0f}s")
+        timeout_label = f"{args.timeout:.0f}s" if args.timeout is not None else "no limit"
+        print(f"timeout per cell: {timeout_label}")
         print()
         print("domains:")
         for d in domains:

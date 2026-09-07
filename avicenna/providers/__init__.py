@@ -6,6 +6,9 @@ depend on a vendor SDK (currently MistralProvider) are resolved lazily via
 the PEP 562 module-level ``__getattr__`` below, and registered under a
 lazy factory so ``get_provider("mistral")`` also defers the SDK import
 until a provider is actually constructed.
+
+Embedding providers follow the same pattern: GoogleEmbeddingProvider is
+behind PEP 562 lazy access and a deferred factory.
 """
 
 from __future__ import annotations
@@ -15,6 +18,8 @@ from typing import TYPE_CHECKING, Any
 
 from avicenna.providers.base import (
     Completion,
+    EmbedTask,
+    EmbeddingProvider,
     LLMProvider,
     Message,
     Role,
@@ -30,10 +35,16 @@ from avicenna.providers.errors import (
     RateLimitError,
     TransientError,
 )
-from avicenna.providers.fake import FakeProvider
-from avicenna.providers.registry import get_provider, register as _register
+from avicenna.providers.fake import FakeEmbeddingProvider, FakeProvider
+from avicenna.providers.registry import (
+    get_embedding_provider,
+    get_provider,
+    register as _register,
+    register_embedding as _register_embedding,
+)
 
 if TYPE_CHECKING:  # names resolved at runtime by __getattr__, below
+    from avicenna.providers.google_embedding import GoogleEmbeddingProvider
     from avicenna.providers.mistral import MistralProvider
 
 
@@ -44,15 +55,28 @@ def _mistral_factory(**kwargs: Any) -> LLMProvider:
     return MistralProvider(**kwargs)
 
 
+def _google_embedding_factory(**kwargs: Any) -> EmbeddingProvider:
+    """Construct a GoogleEmbeddingProvider (no SDK, but defer module import)."""
+    from avicenna.providers.google_embedding import GoogleEmbeddingProvider
+
+    return GoogleEmbeddingProvider(**kwargs)
+
+
 # Register known providers. The mistral entry goes in behind a factory so
 # registration itself does not drag in `mistralai`.
 _register("mistral", _mistral_factory)
 _register("fake", FakeProvider)
 
+# Register known embedding providers.
+_register_embedding("google", _google_embedding_factory)
+_register_embedding("fake", lambda **kw: FakeEmbeddingProvider(**kw))
+
 # Attribute name -> module that defines it. Kept out of the eager import list
-# because importing these modules pulls in a vendor SDK.
+# because importing these modules pulls in a vendor SDK (or in the case of
+# GoogleEmbeddingProvider, keeps the import lightweight).
 _LAZY_ATTRS: dict[str, str] = {
     "MistralProvider": "avicenna.providers.mistral",
+    "GoogleEmbeddingProvider": "avicenna.providers.google_embedding",
 }
 
 
@@ -72,8 +96,9 @@ def __dir__() -> list[str]:
 
 __all__ = [
     "Role", "ToolCall", "Message", "ToolSpec", "Usage", "Completion",
-    "LLMProvider",
+    "LLMProvider", "EmbedTask", "EmbeddingProvider",
     "ProviderError", "AuthError", "RateLimitError", "TransientError",
     "BadRequestError", "ContextOverflowError",
-    "MistralProvider", "FakeProvider", "get_provider",
+    "MistralProvider", "FakeProvider", "FakeEmbeddingProvider",
+    "GoogleEmbeddingProvider", "get_provider", "get_embedding_provider",
 ]

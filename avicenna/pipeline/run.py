@@ -35,6 +35,7 @@ async def execute_run(
     template_override: str | None = None,
     fresh: bool = True,
     resume: bool = False,
+    overrides: dict[str, Any] | None = None,
 ) -> None:
     rid = run_id or str(uuid.uuid4())[:8]
     bus = bus or EventBus()
@@ -43,6 +44,7 @@ async def execute_run(
         run_id=rid, concurrency=concurrency, dry_run=dry_run,
         fresh=fresh, resume=resume, domain_override=domain_override,
         template_override=template_override,
+        overrides=overrides or {},
     )
     ctx = RunContext(spec=spec)
     await bus.emit(RunStarted(

@@ -279,11 +279,12 @@ def test_exclude_from_derivation_absent_defaults_empty(tmp_path: Path) -> None:
 
 
 def test_template_defaulting_unchanged(tmp_path: Path) -> None:
-    """ctx.template defaulting to 'general' is unchanged (regression)."""
-    from avicenna.pipeline.preflight import TEMPLATE_MINIMUMS
+    """ctx.template defaults to 'general' (regression)."""
+    from avicenna.settings import WORDS_PER_HEADING_DEFAULT
 
-    # "general" must still be a valid template key.
-    assert "general" in TEMPLATE_MINIMUMS
+    # The default words_per_heading must be an int (the setting exists).
+    assert isinstance(WORDS_PER_HEADING_DEFAULT, int)
+    assert WORDS_PER_HEADING_DEFAULT > 0
 
 
 # =============================================================================

@@ -8,10 +8,14 @@ Chat is a thin layer on top (Phase 3 Session).
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 Role = Literal["user", "assistant", "tool"]
+EmbedTask = Literal[
+    "RETRIEVAL_DOCUMENT", "RETRIEVAL_QUERY", "SEMANTIC_SIMILARITY",
+]
 
 
 @dataclass(frozen=True)
@@ -75,7 +79,39 @@ class LLMProvider(ABC):
     async def close(self) -> None: ...
 
 
+class EmbeddingProvider(ABC):
+    """Abstract interface for embedding providers.
+
+    Batch-in, batch-out, order preserved.  The batch form is the primitive
+    because the vault index embeds thousands of texts per run.
+    """
+
+    name: str
+    dimensions: int
+
+    @abstractmethod
+    async def embed(
+        self,
+        texts: Sequence[str],
+        *,
+        task: EmbedTask = "RETRIEVAL_DOCUMENT",
+    ) -> list[list[float]]: ...
+
+    async def embed_one(
+        self,
+        text: str,
+        *,
+        task: EmbedTask = "RETRIEVAL_DOCUMENT",
+    ) -> list[float]:
+        """Convenience wrapper around the batch primitive."""
+        results = await self.embed([text], task=task)
+        return results[0]
+
+    @abstractmethod
+    async def close(self) -> None: ...
+
+
 __all__ = [
     "Role", "ToolCall", "Message", "ToolSpec", "Usage", "Completion",
-    "LLMProvider",
+    "LLMProvider", "EmbedTask", "EmbeddingProvider",
 ]
