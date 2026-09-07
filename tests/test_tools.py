@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -11,6 +13,11 @@ from avicenna.tools.base import ToolAccess, ToolSource
 from avicenna.tools.contracts import CONTRACTS, ToolContract
 from avicenna.tools.powershell import normalise_ps_value, build_argv
 from avicenna.tools.registry import ToolRegistry
+
+needs_powershell = pytest.mark.skipif(
+    shutil.which("powershell") is None,
+    reason="PowerShell not available",
+)
 
 
 class FakeTool:
@@ -22,29 +29,25 @@ class FakeTool:
         self.source = source
 
 
-def test_normalise_ps_comma_value():
-    result = normalise_ps_value("A,B,C")
-    assert result == '"A,B,C"'
+def test_normalise_ps_list_joins_with_commas():
+    assert normalise_ps_value(["A", "B", "C"]) == "A,B,C"
 
 
-def test_normalise_ps_space_value():
-    result = normalise_ps_value("hello world")
-    assert result == '"hello world"'
+def test_normalise_ps_tuple_joins_with_commas():
+    assert normalise_ps_value(("X", "Y")) == "X,Y"
 
 
-def test_normalise_ps_list():
-    result = normalise_ps_value(["A", "B", "C"])
-    assert result == '"A,B,C"'
-
-
-def test_normalise_ps_plain():
-    result = normalise_ps_value("simple")
-    assert result == "simple"
-
-
-def test_normalise_ps_bool():
+def test_normalise_ps_bool_returns_empty():
     assert normalise_ps_value(True) == ""
     assert normalise_ps_value(False) == ""
+
+
+def test_normalise_ps_passthrough():
+    """Values pass through unquoted — subprocess handles quoting."""
+    assert normalise_ps_value("simple") == "simple"
+    assert normalise_ps_value("A,B,C") == "A,B,C"
+    assert normalise_ps_value("hello world") == "hello world"
+    assert normalise_ps_value("") == ""
 
 
 def test_build_argv():
@@ -100,3 +103,53 @@ def test_registry_collision_precedence():
     # BUILTIN wins precedence; vault_ps1 version gets aliased
     assert reg.get("test").source == ToolSource.BUILTIN
     assert reg.get("vault_ps1__test").source == ToolSource.VAULT_PS1
+
+
+# -- Round-trip integration tests: verify values survive subprocess ---
+
+_ROUND_TRIP_SCRIPT = """\
+param([string]$Value)
+Write-Output $Value
+"""
+
+
+@needs_powershell
+@pytest.mark.parametrize("value", [
+    "A,B,C",
+    "hello world",
+    "a, b, c",
+    "",
+    "it's",
+    "a;b",
+    "x$y",
+    'has "quotes" inside',
+    "trailing space ",
+])
+def test_ps_value_roundtrip(tmp_path: Path, value: str) -> None:
+    """Value sent through build_argv must arrive verbatim at the script."""
+    script = tmp_path / "echo_value.ps1"
+    script.write_text(_ROUND_TRIP_SCRIPT, encoding="utf-8")
+    argv = build_argv(script, {"Value": value})
+    result = subprocess.run(argv, capture_output=True, text=True)
+    # rstrip only the line ending — .strip() would destroy trailing-space cases
+    received = result.stdout.rstrip("\r\n")
+    assert received == value, (
+        f"expected {value!r} but got {received!r}\n"
+        f"stderr: {result.stderr!r}\n"
+        f"argv: {argv}"
+    )
+
+
+@needs_powershell
+def test_ps_list_roundtrip(tmp_path: Path) -> None:
+    """A list parameter must arrive as comma-joined string."""
+    script = tmp_path / "echo_value.ps1"
+    script.write_text(_ROUND_TRIP_SCRIPT, encoding="utf-8")
+    argv = build_argv(script, {"Value": ["A", "B", "C"]})
+    result = subprocess.run(argv, capture_output=True, text=True)
+    received = result.stdout.rstrip("\r\n")
+    assert received == "A,B,C", (
+        f"expected 'A,B,C' but got {received!r}\n"
+        f"stderr: {result.stderr!r}\n"
+        f"argv: {argv}"
+    )

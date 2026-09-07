@@ -1,9 +1,10 @@
 """PowerShell executor with -File argument normalisation.
 
-Powershell's -File parser interprets bare token "A,B,C" as an array.
-When binding to a [string] parameter, the array is coerced with $OFS
-(a space). Wrapping values in literal double quotes forces single-string
-parsing. Lists are joined with commas first.
+build_argv produces an argv list handed to subprocess without a shell.
+On Windows, subprocess applies MS C runtime quoting automatically, so
+manual quoting would be passed through as part of the value — corrupting
+every multi-token argument. Lists are joined with commas; booleans are
+emitted as flags; everything else passes through unchanged.
 """
 
 from __future__ import annotations
@@ -18,23 +19,25 @@ from typing import Any
 from avicenna.tools.base import Tool, ToolAccess, ToolResult, ToolSource
 from avicenna.tools.contracts import CONTRACTS, ToolContract
 
-_NEEDS_QUOTING = (",", " ", ";", "(", ")", "{", "}", "'", "`", "$", "@")
-
-
 def normalise_ps_value(value: Any) -> str:
     """Render a Python value as one PowerShell -File argument token.
 
     Lists are joined with commas first, since every vault script that
-    takes a list documents a comma-separated string.
+    takes a list documents a comma-separated string.  Booleans are
+    emitted as empty strings because build_argv handles them as bare
+    flags (-Key with no value).
+
+    The return value is NOT quoted.  build_argv produces an argv list
+    for subprocess without a shell; on Windows, subprocess applies MS
+    C runtime quoting.  Adding literal quotes here would pass them
+    through as part of the value — which is exactly what corrupted
+    every multi-token argument before this was fixed.
     """
     if isinstance(value, bool):
         return ""  # switch parameters are emitted as the flag alone
     if isinstance(value, (list, tuple)):
         value = ",".join(str(v) for v in value)
-    text = str(value)
-    if any(ch in text for ch in _NEEDS_QUOTING) or text == "":
-        return '"' + text.replace('"', '`"') + '"'
-    return text
+    return str(value)
 
 
 def build_argv(script: Path, params: Mapping[str, Any]) -> list[str]:
