@@ -23,8 +23,8 @@ from avicenna.pipeline.toolcall import invoke_tool
 from avicenna.settings import load_vault_config, resolve_timeout, resolve_words_per_heading
 from avicenna.tools.base import ToolResult
 from avicenna.vault.routing import classify_domain, route_request, validate_domain
-from avicenna.vault.registry import ThemeRegistry
-from avicenna.vault.vault import Vault
+from avicenna.vault.registry import ThemeRegistry, _normalize as _normalize_tag
+from avicenna.vault.vault import Vault, tag_form
 
 
 # --- graceful degradation ---------------------------------------------------
@@ -922,12 +922,55 @@ class TocStage(PipelineStage):
 _TAGS_SENTINEL = re.compile(r"^\s*TAGS\s*:\s*(?P<tags>.+?)\s*$", re.MULTILINE | re.IGNORECASE)
 
 
+_CLEAN_TAG = re.compile(r'[\[\]"\x27`#]')
+_TAG_STRIP = re.compile(r"[^a-z0-9 -]")
+
+
+def _to_kebab(raw: str) -> str:
+    """Normalise a single tag to lowercase kebab-case.
+
+    Applied to every tag emitted by the tagger so the registry only ever
+    sees clean ``^[a-z0-9]+(-[a-z0-9]+)*$`` input.  The vault's validator
+    documents that it accepts tags with or without decorations — so the
+    tagger emitting them is not a model failure — but downstream code must
+    never receive them.
+    """
+    t = raw.lower().replace("_", "-").replace(" ", "-")
+    t = _TAG_STRIP.sub("", t)
+    while "--" in t:
+        t = t.replace("--", "-")
+    return t.strip("-")
+
+
 def extract_tag_line(output: str) -> str:
-    """Pull the declared tag line out of a tagger's response, or '' if absent."""
+    """Pull the declared tag line out of a tagger's response, or '' if absent.
+
+    Normalises the tagger's output before anything downstream consumes it:
+    strips surrounding brackets and quotes from the whole line, then per-tag
+    removes a leading ``#``, any inner bracket or quote characters, and
+    leading/trailing whitespace, and finally converts to lowercase
+    kebab-case.  The vault's validator documents that it tolerates these
+    decorations, so the tagger emitting them is not a model failure — but
+    the registry must never see them.
+    """
     match = _TAGS_SENTINEL.search(output)
     if match is None:
         return ""
-    return match.group("tags").strip().strip("`").strip()
+    raw = match.group("tags").strip()
+    # Strip outer brackets on the whole line: [a, b, c] → a, b, c
+    if raw.startswith("[") and raw.endswith("]"):
+        raw = raw[1:-1].strip()
+    # Strip outer quotes: 'a, b' or "a, b" → a, b
+    if len(raw) >= 2 and raw[0] in "'\"" and raw[-1] == raw[0]:
+        raw = raw[1:-1].strip()
+    tags = []
+    for part in raw.split(","):
+        t = part.strip()
+        t = _CLEAN_TAG.sub("", t)
+        t = _to_kebab(t)
+        if t:
+            tags.append(t)
+    return ", ".join(tags)
 
 
 class TaggingStage(PipelineStage):
@@ -1060,14 +1103,16 @@ class TaggingStage(PipelineStage):
 def _taxonomy_hint(ctx: RunContext) -> str:
     """Build a taxonomy options hint for constrained tagger retries.
 
-    Reads categories from the vault's derived folder set and themes/types
-    from the registry so the tagger sees the vault's current vocabulary
-    and prefers existing entries over coining new ones.
+    Reads categories from the vault's derived folder set (in tag form,
+    since the tagger's output will be compared against tags) and
+    themes/types from the registry so the tagger sees the vault's current
+    vocabulary and prefers existing entries over coining new ones.
     """
     vault = ctx.spec.vault
     taxonomy = getattr(vault, "taxonomy", None)
     if taxonomy is None or not ctx.domain:
         return ""
+    # categories_for_domain now returns tag form (lowercase kebab-case).
     categories = vault.categories_for_domain(ctx.domain)
     # Include universal categories for completeness in the hint.
     universal = list(getattr(taxonomy, "universal_categories", []))
@@ -1106,6 +1151,10 @@ async def _resolve_tags_against_registry(
 
     Tags that are not themes or types (domain, category, entities, markers)
     pass through unchanged.
+
+    Decides BEFORE mutating: looks up the tag in themes, then types, then
+    mints only if it is in neither.  Never uses the mint-then-undo pattern,
+    which left residue when anything between the two steps went wrong.
     """
     registry = ctx.theme_registry
     if registry is None:
@@ -1115,6 +1164,7 @@ async def _resolve_tags_against_registry(
     if taxonomy is None or not ctx.domain:
         return tag_line
 
+    # Categories and domains are compared in tag form (lowercase kebab-case).
     known_categories = set(ctx.spec.vault.categories_for_domain(ctx.domain))
     universal = set(getattr(taxonomy, "universal_categories", []))
     all_categories = known_categories | universal
@@ -1126,31 +1176,44 @@ async def _resolve_tags_against_registry(
     resolved: list[str] = []
     new_themes: list[str] = []
     new_types: list[str] = []
+    rejected: list[str] = []
 
     for tag in raw_tags:
         if tag in all_entities:
             resolved.append(tag)
             continue
-        # Try theme first — themes are the growing substrate of the reader's
-        # intellectual map.  Types are a small ontology that grows rarely.
-        canon_theme, is_new_theme = registry.resolve_theme(tag)
-        if not is_new_theme:
+        # Decide BEFORE mutating: look the tag up in themes, then types,
+        # then mint only if it is in neither.  No mint-then-undo.
+        canon, reason = registry.lookup_theme(tag)
+        if reason is not None:
+            rejected.append(f"{tag}: {reason}")
+            continue
+        if canon is not None:
             # Already in the theme registry — reuse.
-            resolved.append(canon_theme)
+            resolved.append(canon)
             continue
-        # Not an existing theme.  Could be a type instead of a new theme.
-        canon_type, is_new_type = registry.resolve_type(tag)
-        if not is_new_type:
-            # It was already a known type.  Undo the theme mint and use
-            # the existing type.
-            registry.undo_mint("theme", canon_theme)
-            resolved.append(canon_type)
+        canon, reason = registry.lookup_type(tag)
+        if reason is not None:
+            rejected.append(f"{tag}: {reason}")
             continue
-        # Neither an existing theme nor an existing type.  The tagger
-        # proposed it as a theme (themes are the growing category), so
-        # keep the theme mint.
-        new_themes.append(canon_theme)
-        resolved.append(canon_theme)
+        if canon is not None:
+            # Already a known type — use it.
+            resolved.append(canon)
+            continue
+        # Neither an existing theme nor an existing type.  Mint as a theme
+        # (themes are the growing category).  Use the normalized kebab-case
+        # key for the mint so the registry stores a consistent form.
+        nk = _normalize_tag(tag)
+        tag_key = nk.replace(" ", "-")
+        registry.mint_theme(tag_key)
+        new_themes.append(tag_key)
+        resolved.append(tag_key)
+
+    if rejected:
+        await ctx.emit(
+            LogMessage, level="warning",
+            text=f"registry rejected malformed tags: {'; '.join(rejected)}",
+        )
 
     # Persist newly minted values BEFORE validate_tags reads the file.
     if new_themes or new_types:
@@ -1196,8 +1259,10 @@ def _build_floor_tags(ctx: RunContext) -> list[str]:
     taxonomy = getattr(ctx.spec.vault, "taxonomy", None)
     if taxonomy is None or not ctx.domain:
         return []
-    # Categories come from the vault's folder tree, not taxonomy.json.
-    categories = ctx.spec.vault.categories_for_domain(ctx.domain)
+    # Categories for the floor come from taxonomy.json (not the folder tree),
+    # because the floor is validated against taxonomy.json by validate_tags.ps1.
+    tax_domains = getattr(taxonomy, "domains", {})
+    categories = list(tax_domains.get(ctx.domain, []))
     if not categories:
         return []
     types = list(taxonomy.types) if hasattr(taxonomy, "types") else []

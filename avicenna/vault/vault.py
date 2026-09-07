@@ -8,6 +8,7 @@ ToolRegistry with vault PowerShell tools.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,25 @@ _log = logging.getLogger(__name__)
 
 #: Directories at the vault root that are never treated as domains.
 _DOMAIN_EXCLUDE: frozenset[str] = frozenset({"_tmp"})
+
+#: Regex matching characters that are not lowercase, digit or hyphen.
+_TAG_STRIP = re.compile(r"[^a-z0-9 -]")
+
+
+def tag_form(folder_name: str) -> str:
+    """Convert a vault folder name to lowercase kebab-case tag form.
+
+    ``Art History`` → ``art-history``
+    ``Research @ Vizant`` → ``research-vizant``
+    ``Aqeedah`` → ``aqeedah``
+    ``art_history`` → ``art-history``
+    """
+    # Underscores → hyphens first (before the regex strips them).
+    t = folder_name.lower().replace("_", "-").replace(" ", "-")
+    t = _TAG_STRIP.sub("", t)
+    while "--" in t:
+        t = t.replace("--", "-")
+    return t.strip("-")
 
 
 def _is_excluded(name: str) -> bool:
@@ -101,10 +121,19 @@ class Vault:
         return None
 
     def categories_for_domain(self, domain: str) -> list[str]:
-        """Derived categories for *domain* (case-insensitive lookup).
+        """Derived categories for *domain* in tag form (case-insensitive lookup).
+
+        Returns lowercase kebab-case category names suitable for use as tags,
+        or an empty list when the domain has no subfolders or does not exist.
+        """
+        return [tag_form(c) for c in self.categories_for_domain_path(domain)]
+
+    def categories_for_domain_path(self, domain: str) -> list[str]:
+        """Derived categories for *domain* in path form (case-insensitive lookup).
 
         Returns the on-disk subfolder names, or an empty list when the domain
-        has no subfolders or does not exist.
+        has no subfolders or does not exist.  Use for filesystem paths; use
+        :meth:`categories_for_domain` for tag strings.
         """
         lower = domain.lower()
         for canonical, cats in self._derived_domains.items():

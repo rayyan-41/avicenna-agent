@@ -33,6 +33,9 @@ from typing import Any
 _PLURAL_S = re.compile(r"ies$")
 _PLURAL_ES = re.compile(r"(?:sh|ch|x|z|s)es$")
 
+#: Valid tag form — lowercase kebab-case, at least one character.
+_VALID_TAG = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+
 
 def _normalize(key: str) -> str:
     """Fold case, separator and plural variants into a canonical form.
@@ -126,6 +129,79 @@ class ThemeRegistry:
 
     # --- resolution ----------------------------------------------------------
 
+    #: Characters that must never appear in a proposed tag, even before
+    #: normalisation.  ``_normalize`` would strip some of these silently
+    #: (brackets, quotes), but the registry is the last line of defence
+    #: and must reject rather than silently clean.
+    _FORBIDDEN = re.compile(r"[\[\]\"'`]")
+
+    def _validate_raw(self, proposed: str) -> str | None:
+        """Pre-normalisation check for characters the registry must reject.
+
+        Returns ``None`` if the raw value is acceptable for normalisation,
+        else a reason string.  This catches brackets, quotes, and other
+        decorations that ``_normalize`` would silently strip — the registry
+        must not silently repair malformed input.
+        """
+        if not proposed:
+            return "empty string"
+        if self._FORBIDDEN.search(proposed):
+            return f"forbidden characters in {proposed!r}"
+        return None
+
+    def _validate_tag(self, tag: str) -> str | None:
+        """Validate *tag* (post-normalisation) against the tag-form regex.
+
+        Returns ``None`` if valid, else a reason string.
+        """
+        if not tag:
+            return "empty string"
+        if not _VALID_TAG.match(tag):
+            return f"invalid tag form {tag!r}"
+        return None
+
+    def _lookup(
+        self, proposed: str, canonical_map: dict[str, str],
+    ) -> tuple[str | None, str | None]:
+        """Read-only lookup: check if *proposed* is already known.
+
+        Returns ``(canonical_form, rejection_reason)``.  If the proposed
+        value is already in the registry, *canonical_form* is its stored
+        form and *rejection_reason* is ``None``.  If it is not yet known,
+        both are ``None``.  If it fails validation, *canonical_form* is
+        ``None`` and *rejection_reason* describes why.
+        """
+        reason = self._validate_raw(proposed)
+        if reason is not None:
+            return None, reason
+        nk = _normalize(proposed)
+        tag_key = nk.replace(" ", "-")
+        reason = self._validate_tag(tag_key)
+        if reason is not None:
+            return None, reason
+        # Fuzzy-match via normalized key.
+        if nk in canonical_map:
+            return canonical_map[nk], None
+        guard = semantic_guard(nk, list(canonical_map.keys()))
+        if guard is not None:
+            return guard, None
+        return None, None
+
+    def _mint(
+        self, tag_key: str, canonical_map: dict[str, str],
+        items_key: str, minted_list: list[str],
+    ) -> None:
+        """Mint a new value — call only after ``_lookup`` returned
+        ``(None, None)``.  *tag_key* is the kebab-case form that passed
+        validation.  The normalized key (spaces) is used for the canonical
+        index so future lookups with separator variants match."""
+        nk = tag_key.replace("-", " ")
+        canonical_map[nk] = tag_key
+        items = self.raw.setdefault(items_key, [])
+        items.append(tag_key)
+        minted_list.append(tag_key)
+        self._dirty = True
+
     def resolve_theme(self, proposed: str) -> tuple[str, bool]:
         """Resolve *proposed* against the theme registry.
 
@@ -134,43 +210,74 @@ class ThemeRegistry:
         *is_new* is ``False``.  Otherwise the proposed value is minted
         as a new theme, appended to the raw array, and *is_new* is
         ``True``.
+
+        If the raw value contains forbidden characters or the normalized
+        form fails tag-form validation, the original value is returned
+        with *is_new* ``False`` and nothing is persisted — the caller
+        should reject the tag rather than store it.
         """
+        reason = self._validate_raw(proposed)
+        if reason is not None:
+            return proposed, False
         nk = _normalize(proposed)
+        tag_key = nk.replace(" ", "-")
+        reason = self._validate_tag(tag_key)
+        if reason is not None:
+            return proposed, False
         if nk in self._theme_canonical:
             return self._theme_canonical[nk], False
-
-        # Semantic guard — the seam for embedding-based similarity.
         guard = semantic_guard(nk, list(self._theme_canonical.keys()))
         if guard is not None:
             return guard, False
-
-        # Mint: use the proposed value as-is for the canonical form.
-        self._theme_canonical[nk] = proposed
-        themes = self.raw.setdefault("themes", [])
-        themes.append(proposed)
-        self._minted_themes.append(proposed)
-        self._dirty = True
-        return proposed, True
+        self._mint(tag_key, self._theme_canonical, "themes", self._minted_themes)
+        return tag_key, True
 
     def resolve_type(self, proposed: str) -> tuple[str, bool]:
         """Resolve *proposed* against the type registry.
 
         Same contract as ``resolve_theme``.
         """
+        reason = self._validate_raw(proposed)
+        if reason is not None:
+            return proposed, False
         nk = _normalize(proposed)
+        tag_key = nk.replace(" ", "-")
+        reason = self._validate_tag(tag_key)
+        if reason is not None:
+            return proposed, False
         if nk in self._type_canonical:
             return self._type_canonical[nk], False
-
         guard = semantic_guard(nk, list(self._type_canonical.keys()))
         if guard is not None:
             return guard, False
+        self._mint(tag_key, self._type_canonical, "types", self._minted_types)
+        return tag_key, True
 
-        self._type_canonical[nk] = proposed
-        types = self.raw.setdefault("types", [])
-        types.append(proposed)
-        self._minted_types.append(proposed)
-        self._dirty = True
-        return proposed, True
+    def lookup_theme(self, proposed: str) -> tuple[str | None, str | None]:
+        """Read-only check against the theme registry.
+
+        Returns ``(canonical_form, rejection_reason)``.  ``None, None``
+        means the tag is genuinely new and is eligible for minting.
+        Never mutates.
+        """
+        return self._lookup(proposed, self._theme_canonical)
+
+    def lookup_type(self, proposed: str) -> tuple[str | None, str | None]:
+        """Read-only check against the type registry.
+
+        Same contract as ``lookup_theme``.
+        """
+        return self._lookup(proposed, self._type_canonical)
+
+    def mint_theme(self, tag_key: str) -> None:
+        """Mint a new theme.  Call only after ``lookup_theme`` returned
+        ``(None, None)``.  *tag_key* is the kebab-case form."""
+        self._mint(tag_key, self._theme_canonical, "themes", self._minted_themes)
+
+    def mint_type(self, tag_key: str) -> None:
+        """Mint a new type.  Call only after ``lookup_type`` returned
+        ``(None, None)``.  *tag_key* is the kebab-case form."""
+        self._mint(tag_key, self._type_canonical, "types", self._minted_types)
 
     # --- persistence ---------------------------------------------------------
 

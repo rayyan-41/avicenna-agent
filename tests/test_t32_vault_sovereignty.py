@@ -267,15 +267,15 @@ def test_exclude_from_derivation_loaded_from_taxonomy(tmp_path: Path) -> None:
     )
     cats = v.categories_for_domain("art")
     assert "paintings_source" not in cats
-    assert "Art History" in cats
+    assert "art-history" in cats  # tag form, not folder name
 
 
 def test_exclude_from_derivation_absent_defaults_empty(tmp_path: Path) -> None:
     """When excludeFromDerivation is absent from taxonomy, exclusion is empty."""
     v = _make_vault(tmp_path, {"Science": ["Mathematics", "Astronomy"]})
     cats = v.categories_for_domain("science")
-    assert "Mathematics" in cats
-    assert "Astronomy" in cats
+    assert "mathematics" in cats  # tag form (lowercase)
+    assert "astronomy" in cats
 
 
 def test_template_defaulting_unchanged(tmp_path: Path) -> None:
