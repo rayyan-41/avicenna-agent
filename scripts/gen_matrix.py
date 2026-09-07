@@ -175,21 +175,6 @@ def _body_and_frontmatter(
     return (fm if isinstance(fm, dict) else None), body
 
 
-def _all_valid_tags(taxonomy: Taxonomy) -> set[str]:
-    """Every string the closed taxonomy considers a valid tag."""
-    tags: set[str] = set()
-    tags.update(d.lower() for d in taxonomy.domains)
-    for domain_cats in taxonomy.domains.values():
-        tags.update(c.lower() for c in domain_cats)
-    tags.update(c.lower() for c in taxonomy.universal_categories)
-    tags.update(t.lower() for t in taxonomy.types)
-    tags.update(t.lower() for t in taxonomy.themes)
-    tags.update(m.lower() for m in taxonomy.markers)
-    tags.update(r.lower() for r in taxonomy.reserved_modifiers)
-    tags.add("moc")
-    return tags
-
-
 def _vault_note_index(vault: Vault) -> dict[str, Path]:
     """Map lowercased note stem -> absolute path for wikilink resolution."""
     index: dict[str, Path] = {}
@@ -286,11 +271,10 @@ def _find_moc_files(domain_dir: Path) -> list[Path]:
 
 # ---- per-cell assertions --------------------------------------------------
 
-def _run_assertions(
+async def _run_assertions(
     result: CellResult,
     note_path: Path,
     vault: Vault,
-    valid_tags: set[str],
     note_index: dict[str, Path],
 ) -> None:
     """Check each assertion separately and record failures. Never stop early."""
@@ -315,13 +299,26 @@ def _run_assertions(
         result.failed_assertions.append("frontmatter_parse")
         # Cannot check tags if frontmatter did not parse.
     else:
-        # 4. Every tag drawn from the closed taxonomy.
+        # 4. Delegate tag validation to the vault's own validate_tags tool.
+        #    Entities are open vocabulary (kebab-case proper nouns) and cannot
+        #    be enumerated — a closed set will always reject legitimate notes.
+        #    The vault's validator is the authority; if absent, skip.
         tags = fm.get("tags") or []
         if isinstance(tags, list):
-            for tag in tags:
-                tag_str = str(tag).strip().lower()
-                if tag_str and tag_str not in valid_tags:
-                    result.failed_assertions.append(f"invalid_tag ({tag_str})")
+            tag_line = ", ".join(str(t).strip() for t in tags if str(t).strip())
+            if tag_line and vault.tools.has("validate_tags"):
+                tool = vault.tools.get("validate_tags")
+                tool_result = await tool.invoke(TagLine=tag_line)
+                if tool_result.parsed and tool_result.parsed.ok:
+                    pass  # tags validated
+                else:
+                    reason = (
+                        tool_result.parsed.detail if tool_result.parsed
+                        else (tool_result.stdout or tool_result.stderr or "").strip()[:200]
+                    )
+                    result.failed_assertions.append(f"invalid_tags: {reason}")
+            elif tag_line:
+                result.failed_assertions.append("tag_validation_skipped (validate_tags absent)")
 
     # 5. Every wikilink resolves to a note that exists in the vault.
     for match in _WIKILINK.finditer(body):
@@ -454,7 +451,6 @@ async def _run_cell(
     vault: Vault,
     dry_run: bool,
     timeout: float,
-    valid_tags: set[str],
     note_index: dict[str, Path],
     *,
     force_domain: bool = False,
@@ -571,7 +567,7 @@ async def _run_cell(
             )
 
     note_path = Path(collector.note_path) if collector.note_path else Path()
-    _run_assertions(result, note_path, vault, valid_tags, note_index)
+    await _run_assertions(result, note_path, vault, note_index)
 
     if result.failed_assertions:
         result.status = "WARN" if all(
@@ -710,7 +706,6 @@ async def _async_main(args: argparse.Namespace) -> int:
         return 1
 
     # Pre-compute shared state for assertions.
-    valid_tags = _all_valid_tags(vault.taxonomy)
     note_index = _vault_note_index(vault)
 
     # -- provider (routing + preflight call the model even in dry-run) ------
@@ -740,7 +735,6 @@ async def _async_main(args: argparse.Namespace) -> int:
             vault,
             args.dry_run,
             args.timeout,
-            valid_tags,
             note_index,
             force_domain=args.force_domain,
         )
