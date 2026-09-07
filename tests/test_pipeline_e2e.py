@@ -58,10 +58,10 @@ def _script(system: str, messages: list[Any]) -> Completion:
         return Completion(text=_declaration())
     if "TAGS:" in prompt:
         return Completion(text="Reviewed the note.\nTAGS: philosophy, epistemology, revelation")
-    if "wikilinks" in prompt:
+    if "genuinely related" in prompt:
         # The linker returns the whole note with a link woven in.
         note = prompt.split("\n\n", 1)[-1]
-        return Completion(text=note.replace("reason", "[[reason]]", 1))
+        return Completion(text=note.replace("this section", "this [[section]]", 1))
     if "formatting corrected" in prompt:
         return Completion(text=prompt.split("\n\n", 1)[-1])
     if "Assemble this into one continuous note" in prompt:

@@ -96,6 +96,67 @@ WEAVER_TIMEOUT_S = 600.0
 _FRONTMATTER = re.compile(r"\A---\r?\n(?P<body>.*?)\r?\n---\r?\n?", re.DOTALL)
 _TAGS_LINE = re.compile(r"^tags\s*:.*$", re.MULTILINE)
 
+# Production models sometimes return an UNTERMINATED frontmatter block — an
+# opening `---`, some `key: value` lines, and then straight into the note with
+# no closing `---`.  `_FRONTMATTER` is non-greedy, so it matches from the top
+# down to the FIRST later `---` line — and a Markdown note is full of `---`
+# horizontal rules.  Everything up to that rule is classified as "frontmatter"
+# and, because `_write_back` discards the candidate's frontmatter by design,
+# that content is DELETED.
+#
+# Measured on a realistic note (script output, not speculation):
+#
+#     written = True
+#     TOC survived       : False      <-- the whole Table of Contents was deleted
+#     stray 'date:' leak : False
+#     frontmatter ok     : True
+#     body chars 9622 vs disk 9687    <-- 0.7% loss
+#
+# 0.7% is far under the 25% truncation guard, so the write SUCCEEDS and nothing
+# is reported.  A stage output (the `toc` stage's table of contents) disappears
+# silently.  With a larger malformed block, whole sections would go the same way.
+#
+# When the loss happens to exceed 25% the truncation guard does catch it and the
+# note is left unchanged — safe, but it also throws away the formatter's entire
+# legitimate revision.  Both outcomes are wrong.
+#
+# The root problem is that "starts with ---" is being treated as proof of
+# frontmatter.  It is not.  Frontmatter is YAML-ish: every non-blank line is a
+# key: value, a list item, or an indented continuation.  The strict parser below
+# validates that shape before trusting the frontmatter boundary.
+
+_YAMLISH_LINE = re.compile(
+    r"^\s*(?:[A-Za-z_][\w.-]*\s*:|\s+-\s)",
+    re.MULTILINE,
+)
+
+
+def _strip_malformed_frontmatter(text: str) -> tuple[str, str]:
+    """Drop a malformed leading block and return (dropped_prefix, body).
+
+    When the text starts with ``---`` but the enclosed lines are not all
+    YAML-ish, or there is no closing ``---``, the block is malformed.
+    Instead of trusting the first later ``---`` (which may be a horizontal
+    rule), we drop only the leading run of key-ish lines and return
+    everything from the first non-key-ish line onward as body.
+    """
+    lines = text.split("\n")
+    # Skip the opening ---
+    idx = 1
+    # Consume blank lines and YAML-ish lines
+    while idx < len(lines):
+        line = lines[idx]
+        if not line.strip():
+            idx += 1
+            continue
+        if _YAMLISH_LINE.match(line):
+            idx += 1
+            continue
+        break
+    dropped = "\n".join(lines[:idx])
+    body = "\n".join(lines[idx:])
+    return dropped, body
+
 
 def _split_frontmatter(text: str) -> tuple[str, str]:
     """Return (frontmatter_block, body). The block is '' when absent."""
@@ -141,30 +202,136 @@ def apply_tags(text: str, ctx: RunContext, tags: list[str]) -> str:
     return block + body
 
 
+def _unwrap_model_output(text: str) -> str:
+    """Strip chat preamble and code fences a chatty model wraps around a note.
+
+    Ministral-8b (and models like it) commonly prepend "Here is the corrected
+    note:" and wrap the real content in a ```markdown fence.  This helper
+    peels those wrappers off so the pipeline sees clean Markdown.
+
+    Conservative by design: when nothing matches, the input is returned
+    unchanged.  Idempotent — f(f(x)) == f(x) — because the inner content of
+    an already-unwrapped note never starts with a fence that closes at the
+    very end (a legitimate note continues past any code block it contains).
+    """
+    if not text:
+        return text
+
+    # --- unwrap a fenced block that IS the bulk of the output ---------------
+    # Only match when the fence opens the content (possibly after a preamble)
+    # and closes at the very end.  A fenced block mid-note is legitimate
+    # Markdown (code examples, etc.) and must not be touched.
+    # re doesn't support variable-length back-references (``` vs ~~~), so we
+    # try each fence type separately and match only when the fence opens AND
+    # closes the output.
+    for close_fence in ("```", "~~~"):
+        pattern = re.compile(
+            r"(?s)^(?P<preamble>.*?)\r?\n?"
+            + re.escape(close_fence) + r"(?P<info>[a-zA-Z0-9_-]*)\r?\n"
+            r"(?P<body>.+?)\r?\n"
+            + re.escape(close_fence) + r"\s*\Z",
+        )
+        m = pattern.match(text)
+        if m:
+            # The fence must actually open the real content, not wrap a code
+            # block that sits inside longer prose.  If the preamble already
+            # contains a heading or frontmatter, the fence is mid-note.
+            preamble = m.group("preamble").strip()
+            if not preamble or not (
+                preamble.startswith("---") or preamble.startswith("#")
+            ):
+                return m.group("body")
+
+    # --- drop a leading conversational preamble -----------------------------
+    # Any lines before the first line that is exactly "---" (frontmatter open)
+    # or starts with "#" (a heading).  When no such anchor exists, change
+    # nothing — the model may have returned body-only prose on purpose.
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped == "---" or stripped.startswith("#"):
+            if i > 0:
+                return "\n".join(lines[i:])
+            break
+
+    return text
+
+
 async def _write_back(ctx: RunContext, stage: str, produced: str) -> bool:
     """Persist an agent's revision of the note, if it is safe to.
 
-    Tagging, formatting and linking all return the *whole* note. A model that
-    truncates, summarises or answers conversationally would otherwise replace a
-    10k-word note with a paragraph, so anything that loses more than a quarter
-    of the note is rejected and the previous text stands.
+    The pipeline owns the frontmatter, not the model.  The on-disk
+    frontmatter is ALWAYS preserved — the model's version is discarded
+    whether or not it looks correct.  A model that reformats ``tags: [a, b]``
+    into ``tags: a, b`` would silently break the MOC tool's regex; the
+    guarantee must not depend on the model behaving.
+
+    Truncation is checked against body lengths, not whole-file lengths, so a
+    model that drops the frontmatter does not spend that against the 25%
+    budget.
     """
     assert ctx.note_path is not None
-    candidate = produced.strip()
+    candidate = _unwrap_model_output(produced).strip()
     if not candidate:
         await ctx.emit(LogMessage, level="warning",
                        text=f"{stage} returned nothing; note left unchanged")
         return False
     current = ctx.note_path.read_text(encoding="utf-8", errors="replace")
-    if len(candidate) < len(current.strip()) * 0.75:
+
+    # --- preserve the on-disk frontmatter ------------------------------------
+    disk_fm, disk_body = _split_frontmatter(current)
+    cand_fm, cand_body = _split_frontmatter(candidate)
+
+    # Detect malformed frontmatter: starts with --- but the enclosed lines
+    # are not all YAML-ish, or there is no closing ---.
+    if candidate.startswith("---") and cand_fm:
+        # Validate the enclosed lines
+        fm_lines = cand_fm.strip().split("\n")
+        # Skip opening and closing ---
+        inner_lines = fm_lines[1:-1] if len(fm_lines) > 2 else []
+        all_yamlish = all(
+            not line.strip() or _YAMLISH_LINE.match(line)
+            for line in inner_lines
+        )
+        if not all_yamlish:
+            # The block is malformed: drop only the leading run of key-ish lines
+            await ctx.emit(
+                LogMessage, level="warning",
+                text=f"{stage}: model returned malformed frontmatter block; "
+                     "discarding leading key-ish lines only",
+            )
+            _, cand_body = _strip_malformed_frontmatter(candidate)
+            cand_fm = ""
+
+    if disk_fm:
+        # The disk note owns the frontmatter.  If the model produced its own
+        # frontmatter that differs, warn so the user sees the model defect.
+        if cand_fm and cand_fm.strip() != disk_fm.strip():
+            await ctx.emit(
+                LogMessage, level="warning",
+                text=(f"{stage}: model returned frontmatter that differed from "
+                      "the on-disk copy; the model's frontmatter was discarded"),
+            )
+        result_text = disk_fm + cand_body
+        result_body = cand_body.strip()
+        ref_body = disk_body.strip()
+    else:
+        # No frontmatter on disk (a vault with no tagger is legitimate).
+        result_text = candidate
+        result_body = candidate
+        ref_body = current.strip()
+
+    # --- truncation check on BODY lengths ------------------------------------
+    if len(result_body) < len(ref_body) * 0.75:
         await ctx.emit(
             LogMessage, level="warning",
-            text=(f"{stage} returned {len(candidate)} chars against {len(current)} "
-                  "on disk; rejected as truncation, note left unchanged"),
+            text=(f"{stage} returned {len(result_body)} body chars against "
+                  f"{len(ref_body)} on disk; rejected as truncation, note left unchanged"),
         )
         return False
-    _write_note_atomically(ctx.note_path, candidate if candidate.endswith("\n") else candidate + "\n")
-    ctx.total_words = len(candidate.split())
+
+    _write_note_atomically(ctx.note_path, result_text if result_text.endswith("\n") else result_text + "\n")
+    ctx.total_words = len(result_text.split())
     return True
 
 
