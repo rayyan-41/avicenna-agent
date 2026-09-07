@@ -245,27 +245,50 @@ def mcp_tools() -> None:
 
 
 @app.command("keys")
-def keys_cmd() -> None:
-    """Show the API key pool: size, source, and fingerprints.
+def keys_cmd(
+    all_providers: bool = typer.Option(False, "--all", help="Show keys for every provider in the pool file"),
+) -> None:
+    """Show the API key pool: size, source, fingerprints, grouped by provider.
 
     Read-only; never prints key material and does not require a network call.
     A pool of one is the normal case and does not read as a warning.
+    The configured provider is reported; use --all to show every provider.
     """
-    from avicenna.keypool import load_pool
+    from avicenna.config import Config
+    from avicenna.keypool import DEFAULT_PROVIDER, KeyPool, load_pool, load_pool_file
 
-    try:
-        pool = load_pool("mistral")
-    except RuntimeError:
-        typer.echo("No API keys configured.")
-        raise typer.Exit(1)
+    user_cfg = Config.load_user_config()
+    provider = user_cfg.get("provider", Config.LLM_PROVIDER) or DEFAULT_PROVIDER
 
-    fps = pool.fingerprints()
-    source = pool._source
-    count = len(pool)
-    fp_str = ", ".join(fps) if fps else "?"
+    if all_providers:
+        sections = load_pool_file()
+        if not sections:
+            typer.echo("No API keys configured.")
+            raise typer.Exit(1)
+        typer.echo(f"configured provider: {provider}")
+        typer.echo("")
+        for prov, keys in sections.items():
+            pool = KeyPool(keys, source="file")
+            fps = pool.fingerprints()
+            fp_str = ", ".join(fps) if fps else "?"
+            tag = " (active)" if prov == provider else ""
+            typer.echo(f"  {prov}{tag}: {len(keys)} key(s)")
+            typer.echo(f"    fingerprints: {fp_str}")
+    else:
+        try:
+            pool = load_pool(provider)
+        except RuntimeError:
+            typer.echo(f"No API keys configured for {provider}.")
+            raise typer.Exit(1)
 
-    typer.echo(f"pool: {count} key(s), source: {source}")
-    typer.echo(f"fingerprints: {fp_str}")
+        fps = pool.fingerprints()
+        source = pool._source
+        count = len(pool)
+        fp_str = ", ".join(fps) if fps else "?"
+
+        typer.echo(f"provider: {provider}")
+        typer.echo(f"pool: {count} key(s), source: {source}")
+        typer.echo(f"fingerprints: {fp_str}")
 
 
 # ---------------------------------------------------------------------------

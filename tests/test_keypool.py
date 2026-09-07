@@ -8,6 +8,12 @@ removes a key and the rotation skips it; all-quarantined raises; fingerprints
 never contain key material; concurrent next() from many tasks hands out keys
 without two tasks racing to the same index.
 
+Provider-scoped pool file tests: flat legacy files, inline prefix
+(``provider: key``), section headers (``[provider]``), case-insensitive
+matching, bare keys before and after section headers, keys for an
+unregistered provider are retained but never returned for a different pool,
+env var per provider, and ``load_pool_file`` returning the full structure.
+
 Do NOT put real keys in tests or fixtures. Do NOT read the user's real pool
 file — use tmp_path and monkeypatch.
 """
@@ -21,7 +27,7 @@ from pathlib import Path
 
 import pytest
 
-from avicenna.keypool import KeyPool, load_pool
+from avicenna.keypool import KeyPool, load_pool, load_pool_file
 
 
 # ---------------------------------------------------------------------------
@@ -409,3 +415,266 @@ class TestSourceProperty:
         """Source 'file+single' is accepted."""
         pool = KeyPool(["k1", "k2"], source="file+single")
         assert pool.source == "file+single"
+
+
+# ---------------------------------------------------------------------------
+# T25 — Provider-scoped pool file: legacy flat file regression
+# ---------------------------------------------------------------------------
+
+class TestProviderScopeLegacyFlat:
+    """A flat legacy file with bare keys only — all belong to the default
+    provider (exact backward-compatibility guarantee)."""
+
+    def test_flat_legacy_all_default_provider(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("MISTRAL_API_KEYS", raising=False)
+        _setup_pool_file(
+            tmp_path, monkeypatch,
+            "key-a\nkey-b\nkey-c\n",
+        )
+        pool = load_pool("mistral")
+        assert pool._keys == ["key-a", "key-b", "key-c"]
+
+    def test_flat_legacy_other_provider_returns_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A flat file's keys belong to the default provider; loading another
+        provider's pool from it must not return them."""
+        monkeypatch.delenv("GOOGLE_API_KEYS", raising=False)
+        _setup_pool_file(
+            tmp_path, monkeypatch,
+            "key-a\nkey-b\n",
+            single_key=None,
+        )
+        # read_api_key for google returns None by default in our monkeypatch.
+        # So load_pool("google") should raise (no keys for google).
+        with pytest.raises(RuntimeError, match="no API keys found"):
+            load_pool("google")
+
+
+# ---------------------------------------------------------------------------
+# T25 — Provider-scoped pool file: inline prefix format
+# ---------------------------------------------------------------------------
+
+class TestProviderScopeInlinePrefix:
+    def test_inline_prefix_filters_to_requested_provider(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """mistral: k1 / google: k2 -> load_pool('mistral') returns only k1."""
+        monkeypatch.delenv("MISTRAL_API_KEYS", raising=False)
+        monkeypatch.delenv("GOOGLE_API_KEYS", raising=False)
+        _setup_pool_file(
+            tmp_path, monkeypatch,
+            "mistral: k1\ngoogle: k2\n",
+            single_key=None,
+        )
+        pool = load_pool("mistral")
+        assert pool._keys == ["k1"]
+
+    def test_inline_prefix_google_only(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("GOOGLE_API_KEYS", raising=False)
+        _setup_pool_file(
+            tmp_path, monkeypatch,
+            "mistral: mk1\ngoogle: gk1\ngoogle: gk2\n",
+            single_key=None,
+        )
+        pool = load_pool("google")
+        assert pool._keys == ["gk1", "gk2"]
+
+    def test_mixed_bare_and_prefixed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Bare keys go to default provider; prefixed keys go to named one."""
+        monkeypatch.delenv("MISTRAL_API_KEYS", raising=False)
+        _setup_pool_file(
+            tmp_path, monkeypatch,
+            "bare-key\nmistral: explicit-key\ngoogle: gkey\n",
+            single_key=None,
+        )
+        pool = load_pool("mistral")
+        assert "bare-key" in pool._keys
+        assert "explicit-key" in pool._keys
+        assert "gkey" not in pool._keys
+
+
+# ---------------------------------------------------------------------------
+# T25 — Provider-scoped pool file: section headers
+# ---------------------------------------------------------------------------
+
+class TestProviderScopeSectionHeaders:
+    def test_section_headers_filter(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """[mistral] / [google] produce the same filtering as inline prefix."""
+        monkeypatch.delenv("MISTRAL_API_KEYS", raising=False)
+        _setup_pool_file(
+            tmp_path, monkeypatch,
+            "[mistral]\n"
+            "mk1\n"
+            "mk2\n"
+            "[google]\n"
+            "gk1\n",
+            single_key=None,
+        )
+        pool = load_pool("mistral")
+        assert pool._keys == ["mk1", "mk2"]
+
+    def test_bare_key_before_section_goes_to_default(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A bare key before any section header belongs to the default provider."""
+        monkeypatch.delenv("MISTRAL_API_KEYS", raising=False)
+        _setup_pool_file(
+            tmp_path, monkeypatch,
+            "default-key\n[mistral]\nmistral-key\n",
+            single_key=None,
+        )
+        pool = load_pool("mistral")
+        assert "default-key" in pool._keys
+        assert "mistral-key" in pool._keys
+
+    def test_bare_key_after_section_header(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A bare key after a section header belongs to that section."""
+        monkeypatch.delenv("GOOGLE_API_KEYS", raising=False)
+        _setup_pool_file(
+            tmp_path, monkeypatch,
+            "[google]\ngoogle-bare-key\n",
+            single_key=None,
+        )
+        pool = load_pool("google")
+        assert pool._keys == ["google-bare-key"]
+
+    def test_bare_key_after_section_with_prefix_override(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An inline prefix can override the current section for one key."""
+        monkeypatch.delenv("MISTRAL_API_KEYS", raising=False)
+        monkeypatch.delenv("GOOGLE_API_KEYS", raising=False)
+        _setup_pool_file(
+            tmp_path, monkeypatch,
+            "[google]\n"
+            "gkey\n"
+            "mistral: stray-mistral-key\n"
+            "another-google-key\n",
+            single_key=None,
+        )
+        google_pool = load_pool("google")
+        assert "gkey" in google_pool._keys
+        assert "another-google-key" in google_pool._keys
+        assert "stray-mistral-key" not in google_pool._keys
+
+        mistral_pool = load_pool("mistral")
+        assert "stray-mistral-key" in mistral_pool._keys
+
+
+# ---------------------------------------------------------------------------
+# T25 — Provider-scoped pool file: case-insensitive provider matching
+# ---------------------------------------------------------------------------
+
+class TestProviderScopeCaseInsensitive:
+    def test_case_insensitive_matching(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("MISTRAL_API_KEYS", raising=False)
+        _setup_pool_file(
+            tmp_path, monkeypatch,
+            "MISTRAL: upper-key\nMistral: mixed-key\nmistral: lower-key\n",
+            single_key=None,
+        )
+        pool = load_pool("mistral")
+        assert pool._keys == ["upper-key", "mixed-key", "lower-key"]
+
+    def test_case_insensitive_sections(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("GOOGLE_API_KEYS", raising=False)
+        _setup_pool_file(
+            tmp_path, monkeypatch,
+            "[Google]\ngkey1\n[GOOGLE]\ngkey2\n",
+            single_key=None,
+        )
+        pool = load_pool("google")
+        assert pool._keys == ["gkey1", "gkey2"]
+
+
+# ---------------------------------------------------------------------------
+# T25 — Keys for unregistered provider are retained but never returned
+# ---------------------------------------------------------------------------
+
+class TestProviderScopeUnregistered:
+    def test_unregistered_provider_keys_not_returned_for_other_pool(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Keys for an unregistered provider are parsed but never leak into
+        another provider's pool."""
+        monkeypatch.delenv("MISTRAL_API_KEYS", raising=False)
+        _setup_pool_file(
+            tmp_path, monkeypatch,
+            "mistral: mk\nopenai: okey\n",
+            single_key=None,
+        )
+        pool = load_pool("mistral")
+        assert pool._keys == ["mk"]
+        assert "okey" not in pool._keys
+
+
+# ---------------------------------------------------------------------------
+# T25 — Env var per provider overrides that provider only
+# ---------------------------------------------------------------------------
+
+class TestProviderScopeEnvPerProvider:
+    def test_env_var_for_different_provider(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """GOOGLE_API_KEYS overrides the google pool, not the mistral pool."""
+        monkeypatch.delenv("MISTRAL_API_KEYS", raising=False)
+        _setup_pool_file(
+            tmp_path, monkeypatch,
+            "mistral: mk\ngoogle: gk\n",
+            single_key=None,
+        )
+        monkeypatch.setenv("GOOGLE_API_KEYS", "env-g1,env-g2")
+
+        google_pool = load_pool("google")
+        assert google_pool._keys == ["env-g1", "env-g2"]
+        assert google_pool.source == "env"
+
+        mistral_pool = load_pool("mistral")
+        assert mistral_pool._keys == ["mk"]
+
+
+# ---------------------------------------------------------------------------
+# T25 — load_pool_file returns the full parsed structure
+# ---------------------------------------------------------------------------
+
+class TestLoadPoolFile:
+    def test_returns_full_structure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("avicenna.keypool.Path.home", lambda: tmp_path)
+        avicenna_dir = tmp_path / ".avicenna"
+        avicenna_dir.mkdir(exist_ok=True)
+        pool_file = avicenna_dir / "api_keys_pool"
+        pool_file.write_text(
+            "mistral: mk\n[gk]\ngk1\ngk2\nopenai: okey\n",
+            encoding="utf-8",
+        )
+        sections = load_pool_file()
+        assert "mistral" in sections
+        assert sections["mistral"] == ["mk"]
+        assert "gk" in sections
+        assert sections["gk"] == ["gk1", "gk2"]
+        assert "openai" in sections
+        assert sections["openai"] == ["okey"]
+
+    def test_empty_when_no_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("avicenna.keypool.Path.home", lambda: tmp_path)
+        sections = load_pool_file()
+        assert sections == {}

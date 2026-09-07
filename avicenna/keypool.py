@@ -19,14 +19,34 @@ union, not precedence.  When a working key exists in the user's configured
 single-key store AND different keys exist in the pool file, discarding one
 source shrinks the pool for no reason — the opposite of what a pool is for.
 
-  1. MISTRAL_API_KEYS env var (comma-separated): use EXACTLY those keys.
+  1. {PROVIDER}_API_KEYS env var (comma-separated): use EXACTLY those keys.
      An explicit list is an explicit override — the CI and container case.
-  2. Otherwise: the UNION of the pool file and the single configured key
-     from avicenna/secrets.py:read_api_key, deduplicated, file keys first.
+  2. Otherwise: the UNION of the pool file (filtered to the requested
+     provider) and the single configured key from avicenna/secrets.py,
+     deduplicated, file keys first.
   3. No keys from any source: raise, as before.
 
 A pool of one is the normal, supported case — it behaves exactly like the
 single-key path.
+
+Pool file format (backward-compatible):
+
+    # comments and blank lines ignored, as today
+    <bare key>            -> belongs to the DEFAULT provider
+    mistral: <key>        -> explicitly scoped
+    google: <key>
+
+    [mistral]
+    <key>
+    <key>
+    [google]
+    <key>
+
+A bare key before any section header belongs to the default provider.
+A bare key after a [section] header belongs to that section's provider.
+Provider names are matched case-insensitively and trimmed.
+A key whose provider has no registered implementation is retained in the
+parsed model but never returned for a different provider's pool.
 """
 
 from __future__ import annotations
@@ -41,6 +61,8 @@ from typing import Sequence
 from avicenna.secrets import redact
 
 _log = logging.getLogger(__name__)
+
+DEFAULT_PROVIDER = "mistral"
 
 
 class KeyPool:
@@ -131,14 +153,91 @@ class KeyPool:
         return hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
 
 
-def load_pool(provider: str = "mistral") -> KeyPool:
+def _parse_pool_file(path: Path) -> dict[str, list[str]]:
+    """Parse a pool file into provider -> keys mapping.
+
+    Supports two formats, which may be mixed in a single file:
+
+    * **Section headers**: ``[provider]`` — every bare key after the header
+      belongs to that provider until the next header.
+    * **Inline prefix**: ``provider: key`` — one key, explicitly scoped.
+
+    A bare key with no prefix and no preceding section header belongs to the
+    configured default provider (``DEFAULT_PROVIDER``).
+
+    Provider names are matched case-insensitively and trimmed.  A key whose
+    provider has no registered implementation is still parsed and retained so
+    that ``avicenna keys --all`` can show it — it is simply never returned
+    for a different provider's pool.  Keys are never silently dropped.
+    """
+    sections: dict[str, list[str]] = {}
+    current_provider = DEFAULT_PROVIDER
+
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+
+            # Section header: [provider]
+            if stripped.startswith("[") and stripped.endswith("]"):
+                current_provider = stripped[1:-1].strip().lower()
+                continue
+
+            # Inline prefix: provider: key
+            if ":" in stripped:
+                prefix, key = stripped.split(":", 1)
+                key = key.strip()
+                if key:
+                    prov = prefix.strip().lower()
+                    sections.setdefault(prov, []).append(key)
+                continue
+
+            # Bare key — belongs to the current default provider.
+            sections.setdefault(current_provider, []).append(stripped)
+    except OSError:
+        _log.warning("could not read pool file %s", path)
+
+    return sections
+
+
+def load_pool_file() -> dict[str, list[str]]:
+    """Return the full parsed pool file as provider -> keys mapping.
+
+    Used by the healthcheck to validate keys against their own providers.
+    Returns an empty dict when the pool file does not exist or is empty.
+    """
+    pool_path = Path.home() / ".avicenna" / "api_keys_pool"
+    if pool_path.is_file():
+        return _parse_pool_file(pool_path)
+    return {}
+
+
+def is_provider_registered(name: str) -> bool:
+    """Check whether a provider implementation is registered.
+
+    Returns False when the name is not in the registry or when construction
+    fails for any reason (missing SDK, import error, etc.).  This is used by
+    the healthcheck to decide whether to validate a provider's keys or report
+    them as SKIP — a false negative is safer than a false positive.
+    """
+    from avicenna.providers.registry import get_provider as _gp
+
+    try:
+        _gp(name, api_key="probe", model="probe")
+    except Exception:  # noqa: BLE001 - any failure means "not usable"
+        return False
+    return True
+
+
+def load_pool(provider: str = DEFAULT_PROVIDER) -> KeyPool:
     """Build a KeyPool from the configured sources.
 
-    If MISTRAL_API_KEYS is set, use EXACTLY those keys — an explicit list is
-    an explicit override (CI, containers).  Otherwise take the UNION of the
-    pool file and the single configured key from read_api_key, deduplicated,
-    order preserved with file keys first.  Never silently drop a working
-    credential.
+    If {PROVIDER}_API_KEYS is set, use EXACTLY those keys — an explicit list
+    is an explicit override (CI, containers).  Otherwise take the UNION of
+    the pool file keys for THIS PROVIDER and the single configured key from
+    read_api_key, deduplicated, order preserved with file keys first.  Never
+    silently drop a working credential.
 
     A pool of one is the normal case and must behave like today's single-key
     path.
@@ -154,17 +253,9 @@ def load_pool(provider: str = "mistral") -> KeyPool:
             _log.info("loaded %d key(s) from %s env var", len(pool), env_name)
             return pool
 
-    # Source 2+3: union of pool file and single configured key.
-    file_keys: list[str] = []
-    pool_path = Path.home() / ".avicenna" / "api_keys_pool"
-    if pool_path.is_file():
-        try:
-            for line in pool_path.read_text(encoding="utf-8").splitlines():
-                stripped = line.strip()
-                if stripped and not stripped.startswith("#"):
-                    file_keys.append(stripped)
-        except OSError:
-            _log.warning("could not read pool file %s", pool_path)
+    # Source 2+3: union of pool file (this provider only) and single key.
+    sections = load_pool_file()
+    file_keys = sections.get(provider.lower(), [])
 
     from avicenna.secrets import read_api_key
 
@@ -177,7 +268,6 @@ def load_pool(provider: str = "mistral") -> KeyPool:
         combined.append(single)
 
     if combined:
-        # Determine which sources contributed.
         has_file = bool(file_keys)
         has_single = bool(single)
         if has_file and has_single:
@@ -194,8 +284,8 @@ def load_pool(provider: str = "mistral") -> KeyPool:
     # Callers should check for None before using.
     raise RuntimeError(
         f"no API keys found for {provider!r}; set {env_name}, "
-        f"create {pool_path}, or configure a single key"
+        f"create ~/.avicenna/api_keys_pool, or configure a single key"
     )
 
 
-__all__ = ["KeyPool", "load_pool"]
+__all__ = ["KeyPool", "load_pool", "load_pool_file", "is_provider_registered", "DEFAULT_PROVIDER"]

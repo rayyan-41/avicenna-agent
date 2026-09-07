@@ -130,81 +130,132 @@ def probe_config(vault_override: str | None) -> ProbeResult:
 # ---------------------------------------------------------------------------
 
 async def probe_provider() -> ProbeResult:
-    """Validate every key in the pool concurrently. SKIP if no key is
-    configured.
+    """Validate pool keys against their own provider, not just the active one.
 
-    Each key is validated independently (cheap real call via validate_key).
-    Results are reported by fingerprint — never key material, never a prefix.
-    The pool source (env / file / single / file+single) is included so a user
-    can tell where a bad key came from.
+    Keys for the active provider: validate as before.
+    Keys for another registered provider: validate against that provider,
+    reported separately.
+    Keys for a provider with no registered implementation: SKIP — the user
+    has a credential the harness cannot use yet.  This is informational and
+    must NOT affect the exit code.
 
-    Verdict:
-      - every key valid        -> PASS ("4/4 keys valid")
-      - some valid, some not   -> WARN (failing fingerprints named, told they
-                                  will be quarantined at runtime, with a
-                                  concrete instruction to remove them from the
-                                  pool file)
-      - no key valid           -> FAIL
-      - no keys configured     -> SKIP (unchanged)
+    Never advise removing a key merely because the active provider rejects
+    it.  If a key fails against its own provider, that is a WARN naming the
+    fingerprint.
     """
     from avicenna.auth import DEFAULT_MODEL, DEFAULT_PROVIDER, validate_key
     from avicenna.config import Config
-    from avicenna.keypool import load_pool
+    from avicenna.keypool import KeyPool, is_provider_registered, load_pool, load_pool_file
 
-    # Try to load a pool. SKIP when no key is configured at all.
+    sections = load_pool_file()
+
+    # Try to load the active provider's pool.  SKIP when no key is configured
+    # for it at all (preserves the original no-keys-configured path).
     try:
-        pool = load_pool(DEFAULT_PROVIDER)
+        active_pool = load_pool(DEFAULT_PROVIDER)
     except RuntimeError:
+        if sections:
+            # Keys exist for other providers but not the active one.
+            return ProbeResult("PROVIDER", Status.SKIP,
+                               f"no API keys configured for {DEFAULT_PROVIDER}")
         return ProbeResult("PROVIDER", Status.SKIP, "no API key configured")
 
     model = Config.load_user_config().get("model", DEFAULT_MODEL)
-    keys = list(pool._keys)
-    fps = pool.fingerprints()
-    fp_by_key: dict[str, str] = dict(zip(keys, fps))
-    source = pool.source
+    active_source = active_pool.source
 
-    # Validate every key concurrently — they are independent network calls.
-    async def _check(key: str) -> tuple[str, bool, str]:
-        fp = fp_by_key[key]
-        result = await validate_key(DEFAULT_PROVIDER, key, model)
-        return fp, result.ok, result.detail
+    # Validate the active provider's keys concurrently.
+    async def _check(
+        provider_name: str, key: str, fp: str
+    ) -> tuple[str, str, bool, str]:
+        result = await validate_key(provider_name, key, model)
+        return provider_name, fp, result.ok, result.detail
 
-    results_list = await asyncio.gather(*[_check(k) for k in keys])
+    active_keys = list(active_pool._keys)
+    active_fps = active_pool.fingerprints()
+    fp_by_key: dict[str, str] = dict(zip(active_keys, active_fps))
+
+    active_tasks = [_check(DEFAULT_PROVIDER, k, fp_by_key[k]) for k in active_keys]
+    active_results = await asyncio.gather(*active_tasks)
 
     ok_fps: list[str] = []
     fail_lines: list[str] = []
-    for fp, ok, detail in results_list:
+    for _prov, fp, ok, detail in active_results:
         if ok:
             ok_fps.append(fp)
         else:
             fail_lines.append(f"{fp}: {detail}")
 
-    count = len(keys)
-    good = len(ok_fps)
+    # Accumulate all detail lines across every provider.
+    all_details: list[str] = []
+
+    active_good = len(ok_fps)
+    active_count = len(active_keys)
+
+    if fail_lines:
+        all_details.extend(fail_lines)
+        pool_path = str(Path.home() / ".avicenna" / "api_keys_pool")
+        if active_source in ("file", "file+single"):
+            all_details.append(
+                "Remove the failing keys from " + pool_path
+                + " to suppress this warning."
+            )
+
+    # Validate keys for other providers in the file.
+    for prov, keys in sections.items():
+        if prov == DEFAULT_PROVIDER:
+            continue
+        if not keys:
+            continue
+
+        if not is_provider_registered(prov):
+            # No implementation for this provider — informational only.
+            s = "s" if len(keys) != 1 else ""
+            all_details.append(
+                f"{prov}: {len(keys)} key{s}, no provider implementation registered"
+            )
+            continue
+
+        # Registered provider — validate its keys against itself.
+        prov_pool = KeyPool(keys, source="file")
+        prov_fps = prov_pool.fingerprints()
+        prov_fp_map = dict(zip(keys, prov_fps))
+        prov_tasks = [_check(prov, k, prov_fp_map[k]) for k in keys]
+        prov_results = await asyncio.gather(*prov_tasks)
+
+        prov_ok: list[str] = []
+        prov_fail: list[str] = []
+        for _p, fp, ok, detail in prov_results:
+            if ok:
+                prov_ok.append(fp)
+            else:
+                prov_fail.append(f"{fp}: {detail}")
+
+        total = len(keys)
+        good = len(prov_ok)
+        s = "s" if total != 1 else ""
+        if good == total:
+            all_details.append(f"{prov}: {total}/{total} key{s} valid")
+        else:
+            all_details.append(f"{prov}: {good}/{total} key{s} valid")
+            all_details.extend(prov_fail)
+
+    # Verdict is driven by the ACTIVE provider's results only.
+    count = active_count
+    good = active_good
 
     if good == count:
-        # Every key validated.
-        detail = f"{count}/{count} keys valid (source={source})"
-        return ProbeResult("PROVIDER", Status.OK, detail)
+        detail = f"{count}/{count} keys valid (source={active_source})"
+        return ProbeResult("PROVIDER", Status.OK, detail, all_details)
 
     if good == 0:
-        # No key works.
-        detail = f"0/{count} keys valid (source={source})"
-        return ProbeResult("PROVIDER", Status.FAIL, detail, fail_lines)
+        detail = f"0/{count} keys valid (source={active_source})"
+        return ProbeResult("PROVIDER", Status.FAIL, detail, all_details)
 
-    # Mixed — some good, some bad.  WARN: the bad keys will be quarantined at
-    # runtime, but the user can proactively remove them from the pool file.
-    details: list[str] = []
-    details.extend(fail_lines)
-    # Only suggest pool-file removal when keys actually came from the file.
-    if source in ("file", "file+single"):
-        pool_path = str(Path.home() / ".avicenna" / "api_keys_pool")
-        details.append(
-            "Remove the failing keys from " + pool_path
-            + " to suppress this warning."
-        )
-    summary = f"{good}/{count} keys valid; {count - good} will be quarantined (source={source})"
-    return ProbeResult("PROVIDER", Status.WARN, summary, details)
+    summary = (
+        f"{good}/{count} keys valid; {count - good} will be quarantined "
+        f"(source={active_source})"
+    )
+    return ProbeResult("PROVIDER", Status.WARN, summary, all_details)
 
 
 # ---------------------------------------------------------------------------
