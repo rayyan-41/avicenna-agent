@@ -1,4 +1,10 @@
 #--- Security (CRITICAL) ---
+#--- API key pools (CRITICAL: never commit) ---
+api_keys_pool
+api_keys_pool.*
+*.keys
+*keys_pool*
+
 .env
 .env.local
 credentials.json
