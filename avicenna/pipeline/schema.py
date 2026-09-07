@@ -40,6 +40,9 @@ class FrontmatterSchema:
     defaults: dict[str, str] = field(default_factory=dict)
 
 
+_KEY_VALUE = re.compile(r"^\s*([A-Za-z_][\w.-]*)\s*:\s*(.*?)\s*$", re.MULTILINE)
+
+
 def _parse_frontmatter_keys(text: str) -> list[str] | None:
     """Return the ordered list of YAML keys from a frontmatter block, or None."""
     match = _FRONTMATTER.match(text)
@@ -52,6 +55,29 @@ def _parse_frontmatter_keys(text: str) -> list[str] | None:
         if m:
             keys.append(m.group(1))
     return keys if keys else None
+
+
+def _extract_frontmatter_value(text: str, key: str) -> str | None:
+    """Return the YAML-parsed value of *key* from a frontmatter block, or None.
+
+    The raw YAML scalar is parsed so quoted values (``""``, ``'foo'``) resolve
+    to their Python equivalents rather than carrying the quote characters.
+    """
+    match = _FRONTMATTER.match(text)
+    if match is None:
+        return None
+    body = match.group("body")
+    for line in body.splitlines():
+        m = _KEY_VALUE.match(line)
+        if m and m.group(1) == key:
+            raw = m.group(2)
+            try:
+                import yaml
+                parsed = yaml.safe_load(raw)
+            except Exception:  # noqa: BLE001
+                return raw
+            return str(parsed) if parsed is not None else ""
+    return None
 
 
 def _is_moc(path: Path) -> bool:
@@ -115,26 +141,21 @@ def _dominant_schema(keys_lists: Sequence[Sequence[str]]) -> tuple[tuple[str, ..
     return best, f"{count}/{len(keys_lists)}"
 
 
-def _default_for_key(key: str, samples: Sequence[Sequence[str]],
-                     all_keys: Sequence[Sequence[str]]) -> str | None:
+def _default_for_key(key: str, values: Sequence[str]) -> str | None:
     """Return a sensible default for *key* when the harness can fill one.
 
-    ``date`` → today's ISO string.  ``status`` → the most common value in the
-    sample.  Everything else → None (the harness has nothing to put there).
+    ``date`` → today's ISO string.  For every other key, if the sampled
+    values are all the same literal (including empty string), that literal
+    becomes the default.  When values genuinely vary, return ``None`` —
+    the harness does not invent content.
     """
     if key == "date":
         return date.today().isoformat()
-    if key == "status":
-        # Find the most common 'status' value across samples.
-        values: Counter[str] = Counter()
-        for keys in all_keys:
-            # We need the actual value, not just the key name.  Re-parse is
-            # expensive but status defaults are cached per run, so this runs
-            # once.
-            pass
-        # We don't have the values here — the caller must supply them.  For
-        # now return the most common status value observed in real vaults.
-        return "complete"
+    if not values:
+        return None
+    first = values[0]
+    if all(v == first for v in values):
+        return first
     return None
 
 
@@ -180,10 +201,24 @@ def detect_frontmatter_schema(
     if "tags" not in best:
         best = (*best, "tags")
 
+    # Collect the actual text value of each key across every sampled note so
+    # _default_for_key can learn consistent-value defaults (e.g. ``note: ""``
+    # appearing in every note becomes the default, not an omission).
+    values_per_key: dict[str, list[str]] = {k: [] for k in best}
+    for path in notes:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for k in best:
+            v = _extract_frontmatter_value(text, k)
+            if v is not None:
+                values_per_key[k].append(v)
+
     # Build defaults for keys the harness can fill.
     defaults: dict[str, str] = {}
     for k in best:
-        d = _default_for_key(k, keys_lists, keys_lists)
+        d = _default_for_key(k, values_per_key.get(k, []))
         if d is not None:
             defaults[k] = d
 

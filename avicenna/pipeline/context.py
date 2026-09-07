@@ -15,6 +15,7 @@ from avicenna.bus import EventBus
 from avicenna.events import Event
 from avicenna.pipeline.schema import FrontmatterSchema
 from avicenna.providers.base import LLMProvider
+from avicenna.vault.registry import ThemeRegistry
 from avicenna.vault.vault import Vault
 from avicenna.vault.models import AgentDef
 
@@ -72,6 +73,10 @@ class RunContext:
     #: Detected frontmatter schema for this run, cached so every stage writes
     #: the same convention.  Set once by AssemblyStage before the first write.
     frontmatter_schema: FrontmatterSchema | None = None
+    #: Theme/type registry for this run.  Loaded once during tagging so
+    #: themes and types can be resolved against the vault's accumulated
+    #: vocabulary before validation.
+    theme_registry: ThemeRegistry | None = None
 
     @property
     def tmp_dir(self) -> Path:

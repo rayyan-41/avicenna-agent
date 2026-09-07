@@ -11,7 +11,7 @@ from typing import Any
 from avicenna.events import (
     LinkCandidatesFound, LogMessage, ManifestWritten, MocUpdated,
     NoteWritten, PreflightDeclared, SchemaDetected, Stage, TagsProposed,
-    TagsValidated, WordCountChecked,
+    TagsValidated, ThemeMinted, WordCountChecked,
 )
 from avicenna.pipeline.schema import FrontmatterSchema, detect_frontmatter_schema
 from avicenna.pipeline.context import RunContext
@@ -24,6 +24,7 @@ from avicenna.pipeline.sections import generate_sections
 from avicenna.pipeline.toolcall import invoke_tool
 from avicenna.tools.base import ToolResult
 from avicenna.vault.routing import classify_domain, route_request, validate_domain
+from avicenna.vault.registry import ThemeRegistry
 from avicenna.vault.vault import Vault
 
 
@@ -276,8 +277,10 @@ def build_frontmatter(ctx: RunContext, tags: list[str] | None = None) -> str:
         value_map: dict[str, str] = {}
         value_map["tags"] = _render_tags(tags or [])
         value_map["title"] = ctx.spec.topic
-        value_map["domain"] = ctx.domain or "general"
-        value_map["template"] = ctx.template or "general"
+        if ctx.domain:
+            value_map["domain"] = ctx.domain
+        if ctx.template:
+            value_map["template"] = ctx.template
         for k in schema.keys:
             if k == "tags":
                 # tags is a YAML flow sequence ([a, b]) and must not be
@@ -292,8 +295,10 @@ def build_frontmatter(ctx: RunContext, tags: list[str] | None = None) -> str:
             # does not invent content for a key just to fill it.
     else:
         lines.append(f"title: {_quote_yaml_scalar(ctx.spec.topic)}")
-        lines.append(f"domain: {_quote_yaml_scalar(ctx.domain or 'general')}")
-        lines.append(f"template: {_quote_yaml_scalar(ctx.template or 'general')}")
+        if ctx.domain:
+            lines.append(f"domain: {_quote_yaml_scalar(ctx.domain)}")
+        if ctx.template:
+            lines.append(f"template: {_quote_yaml_scalar(ctx.template)}")
         lines.append(f"tags: {_render_tags(tags or [])}")
     lines.append("---")
     return "\n".join(lines) + "\n"
@@ -946,15 +951,24 @@ class TaggingStage(PipelineStage):
         if "tagger" not in ctx.spec.vault.agents:
             await ctx.emit(LogMessage, level="warning", text="no tagger agent registered; skipping")
             return
+
+        # Load the theme/type registry once per run.
+        if ctx.theme_registry is None:
+            taxonomy_path = ctx.spec.vault.root / ".agents" / "taxonomy.json"
+            if taxonomy_path.is_file():
+                try:
+                    ctx.theme_registry = ThemeRegistry.load(taxonomy_path)
+                except (OSError, ValueError) as exc:
+                    await ctx.emit(LogMessage, level="warning",
+                                   text=f"could not load taxonomy registry: {exc}")
+
         for attempt in range(1, 4):
             retry_detail = ""
             if attempt > 1 and ctx.handoffs.get("tagger_errors"):
                 retry_detail = f"\nPrevious validation errors: {ctx.handoffs['tagger_errors']}"
-            # On attempts 2-3, inject the actual valid options so the model is
-            # not asked to guess from a closed vocabulary it was never shown.
-            taxonomy_hint = ""
-            if attempt > 1:
-                taxonomy_hint = _taxonomy_hint(ctx)
+            # Show the taxonomy hint (including registry state) on every
+            # attempt so the tagger sees current themes and types.
+            taxonomy_hint = _taxonomy_hint(ctx) if attempt > 1 else ""
             tagger_payload = (
                 f"Note path: {ctx.note_path}\n"
                 "Reply with the tags on a single line beginning with 'TAGS:', "
@@ -975,12 +989,21 @@ class TaggingStage(PipelineStage):
                 await ctx.emit(LogMessage, level="warning",
                                text="tagger produced no TAGS: line")
                 continue
-            await ctx.emit(TagsProposed, tags=tuple(tag_line.split(",")))
-            result = await _invoke_optional(ctx, "validate_tags", TagLine=tag_line)
+            await ctx.emit(TagsProposed, tags=tuple(
+                t.strip() for t in tag_line.split(",") if t.strip()
+            ))
+
+            # --- registry resolution -------------------------------------------
+            # Resolve themes and types against the registry BEFORE validation.
+            # Newly minted values are persisted to taxonomy.json so the
+            # vault's own validate_tags sees them.
+            resolved_line = await _resolve_tags_against_registry(tag_line, ctx)
+
+            result = await _invoke_optional(ctx, "validate_tags", TagLine=resolved_line)
             if result is None:
                 # No validator in this vault: trust the tagger rather than
                 # burning three attempts failing against a tool that is absent.
-                ctx.tags = [t.strip() for t in tag_line.split(",") if t.strip()]
+                ctx.tags = [t.strip() for t in resolved_line.split(",") if t.strip()]
                 ctx.handoffs["tagger"] = tagger_output
                 await ctx.emit(TagsValidated, verdict="pass",
                                message="accepted unvalidated (validate_tags absent)",
@@ -988,7 +1011,7 @@ class TaggingStage(PipelineStage):
                 break
             token = result.parsed.token if result.parsed else ""
             if token == "PASS":
-                ctx.tags = [t.strip() for t in tag_line.split(",") if t.strip()]
+                ctx.tags = [t.strip() for t in resolved_line.split(",") if t.strip()]
                 ctx.handoffs["tagger"] = tagger_output
                 await ctx.emit(TagsValidated, verdict="pass", accepted=tuple(ctx.tags))
                 break
@@ -1028,9 +1051,9 @@ class TaggingStage(PipelineStage):
 def _taxonomy_hint(ctx: RunContext) -> str:
     """Build a taxonomy options hint for constrained tagger retries.
 
-    Reads categories from the vault's derived folder set and other taxonomy
-    fields from taxonomy.json so each vault's own vocabulary is what the
-    tagger sees.
+    Reads categories from the vault's derived folder set and themes/types
+    from the registry so the tagger sees the vault's current vocabulary
+    and prefers existing entries over coining new ones.
     """
     vault = ctx.spec.vault
     taxonomy = getattr(vault, "taxonomy", None)
@@ -1040,8 +1063,14 @@ def _taxonomy_hint(ctx: RunContext) -> str:
     # Include universal categories for completeness in the hint.
     universal = list(getattr(taxonomy, "universal_categories", []))
     all_cats = [*categories, *universal] if universal else categories
-    types = list(taxonomy.types) if hasattr(taxonomy, "types") else []
-    themes = list(taxonomy.themes) if hasattr(taxonomy, "themes") else []
+    # Use registry when available; fall back to taxonomy for init vaults.
+    registry = ctx.theme_registry
+    if registry is not None:
+        types = registry.types_for_hint()
+        themes = registry.themes_for_hint()
+    else:
+        types = list(taxonomy.types) if hasattr(taxonomy, "types") else []
+        themes = list(taxonomy.themes) if hasattr(taxonomy, "themes") else []
     lines = [
         f"\nValid tags for the routed domain ({ctx.domain}):",
         f"  Domain (exactly 1): {ctx.domain}",
@@ -1053,6 +1082,86 @@ def _taxonomy_hint(ctx: RunContext) -> str:
         "The positional order is: domain, category, type, themes..., entities..., cli\n",
     ]
     return "\n".join(lines)
+
+
+async def _resolve_tags_against_registry(
+    tag_line: str,
+    ctx: RunContext,
+) -> str:
+    """Resolve themes and types in *tag_line* against the registry.
+
+    Returns a new tag line with near-duplicate themes/types folded onto
+    existing registry entries and genuinely new ones minted and persisted.
+    Emits ``ThemeMinted`` for each category of new keys and persists the
+    taxonomy before returning so ``validate_tags`` sees the updated file.
+
+    Tags that are not themes or types (domain, category, entities, markers)
+    pass through unchanged.
+    """
+    registry = ctx.theme_registry
+    if registry is None:
+        return tag_line
+
+    taxonomy = getattr(ctx.spec.vault, "taxonomy", None)
+    if taxonomy is None or not ctx.domain:
+        return tag_line
+
+    known_categories = set(ctx.spec.vault.categories_for_domain(ctx.domain))
+    universal = set(getattr(taxonomy, "universal_categories", []))
+    all_categories = known_categories | universal
+    known_domains = set(ctx.spec.vault.domain_names)
+    markers = set(taxonomy.markers) if hasattr(taxonomy, "markers") else set()
+    all_entities = known_domains | all_categories | markers
+
+    raw_tags = [t.strip() for t in tag_line.split(",") if t.strip()]
+    resolved: list[str] = []
+    new_themes: list[str] = []
+    new_types: list[str] = []
+
+    for tag in raw_tags:
+        if tag in all_entities:
+            resolved.append(tag)
+            continue
+        # Try theme first — themes are the growing substrate of the reader's
+        # intellectual map.  Types are a small ontology that grows rarely.
+        canon_theme, is_new_theme = registry.resolve_theme(tag)
+        if not is_new_theme:
+            # Already in the theme registry — reuse.
+            resolved.append(canon_theme)
+            continue
+        # Not an existing theme.  Could be a type instead of a new theme.
+        canon_type, is_new_type = registry.resolve_type(tag)
+        if not is_new_type:
+            # It was already a known type.  Undo the theme mint and use
+            # the existing type.
+            registry.undo_mint("theme", canon_theme)
+            resolved.append(canon_type)
+            continue
+        # Neither an existing theme nor an existing type.  The tagger
+        # proposed it as a theme (themes are the growing category), so
+        # keep the theme mint.
+        new_themes.append(canon_theme)
+        resolved.append(canon_theme)
+
+    # Persist newly minted values BEFORE validate_tags reads the file.
+    if new_themes or new_types:
+        ok = registry.persist()
+        if not ok:
+            await ctx.emit(
+                LogMessage, level="warning",
+                text="taxonomy.json is unwritable; new themes/types not persisted "
+                     "but run continues with validated tags",
+            )
+        if new_themes:
+            await ctx.emit(ThemeMinted, kind="theme",
+                           minted=tuple(new_themes),
+                           registry_size=registry.theme_count)
+        if new_types:
+            await ctx.emit(ThemeMinted, kind="type",
+                           minted=tuple(new_types),
+                           registry_size=registry.type_count)
+
+    return ", ".join(resolved)
 
 
 def _build_floor_tags(ctx: RunContext) -> list[str]:

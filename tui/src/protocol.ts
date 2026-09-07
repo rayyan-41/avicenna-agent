@@ -51,6 +51,7 @@ export type EventName =
   | 'TagsProposed'
   | 'TagsValidated'
   | 'SchemaDetected'
+  | 'ThemeMinted'
   | 'LinkCandidatesFound'
   | 'MocUpdated'
   | 'NoteWritten'

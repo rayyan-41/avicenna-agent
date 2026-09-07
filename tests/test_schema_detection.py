@@ -446,7 +446,11 @@ def test_build_frontmatter_omits_keys_without_value_or_default(tmp_path: Path) -
 
 
 def test_build_frontmatter_fallback_without_schema(tmp_path: Path) -> None:
-    """Without a detected schema, falls back to scaffold (title/domain/template/tags)."""
+    """Without a detected schema, falls back to scaffold (title/domain/template/tags).
+
+    When domain or template are genuinely absent, the key is omitted — the
+    harness no longer invents a ``general`` fallback.
+    """
     vault = _scaffold(tmp_path)
 
     ctx = RunContext(spec=RunSpec(
@@ -463,7 +467,8 @@ def test_build_frontmatter_fallback_without_schema(tmp_path: Path) -> None:
     parsed = _parse_frontmatter_yaml(fm)
     assert parsed["title"] == "Test Topic"
     assert parsed["domain"] == "general"
-    assert parsed["template"] == "general"
+    # template was not set on ctx → omitted, not defaulted to "general"
+    assert "template" not in parsed
     assert parsed["tags"] == ["philosophy"]
 
 
@@ -540,3 +545,85 @@ def test_domain_schema_detection_prefers_domain_notes(tmp_path: Path) -> None:
     schema = detect_frontmatter_schema(root, domain="art")
     assert schema.keys == ("date", "status", "tags", "note"), f"got {schema.keys}"
     assert schema.source == "domain"
+
+
+# =============================================================================
+# T34 Part A: consistent-value defaults round-trip through detection
+# =============================================================================
+
+
+def test_consistent_empty_string_becomes_default(tmp_path: Path) -> None:
+    """A key whose value is consistently empty string across the sample gets
+    ``""`` as its default, so ``note: ""`` round-trips."""
+    root = tmp_path / "vault"
+    root.mkdir()
+
+    for i in range(3):
+        _write_note(root, "Art", f"note{i}.md",
+                    "---\ndate: 2024-01-0{d}\nstatus: complete\ntags: [art]\nnote: \"\"\n---\n\nBody.\n".format(d=i+1))
+
+    schema = detect_frontmatter_schema(root)
+    assert "note" in schema.defaults, f"note must have a default; got {schema.defaults}"
+    assert schema.defaults["note"] == "", f"expected empty string, got {schema.defaults['note']!r}"
+
+
+def test_consistent_nonempty_becomes_default(tmp_path: Path) -> None:
+    """A key whose value is consistently the same non-empty literal gets that
+    literal as its default."""
+    root = tmp_path / "vault"
+    root.mkdir()
+
+    for i in range(3):
+        _write_note(root, "Art", f"note{i}.md",
+                    "---\ndate: 2024-01-01\nstatus: draft\ntags: [art]\n---\n\nBody.\n")
+
+    schema = detect_frontmatter_schema(root)
+    assert schema.defaults.get("status") == "draft", f"got {schema.defaults}"
+
+
+def test_varying_values_omit_key_from_defaults(tmp_path: Path) -> None:
+    """A key whose values genuinely vary across samples is NOT given a default."""
+    root = tmp_path / "vault"
+    root.mkdir()
+
+    statuses = ["complete", "draft", "complete"]
+    for i, status in enumerate(statuses):
+        _write_note(root, "Art", f"note{i}.md",
+                    f"---\ndate: 2024-01-01\nstatus: {status}\ntags: [art]\n---\n\nBody.\n")
+
+    schema = detect_frontmatter_schema(root)
+    assert "status" not in schema.defaults, f"varying status must not be defaulted; got {schema.defaults}"
+
+
+def test_consistent_default_round_trips_in_build_frontmatter(tmp_path: Path) -> None:
+    """A detected consistent-value default appears in the built frontmatter."""
+    root = tmp_path / "vault"
+    root.mkdir()
+
+    for i in range(3):
+        _write_note(root, "Art", f"note{i}.md",
+                    "---\ndate: 2024-01-01\nstatus: complete\ntags: [art]\nnote: \"\"\n---\n\nBody.\n")
+
+    vault = _scaffold(tmp_path)
+    # Re-create notes in the scaffolded vault
+    for i in range(3):
+        _write_note(vault.root, "Art", f"note{i}.md",
+                    "---\ndate: 2024-01-01\nstatus: complete\ntags: [art]\nnote: \"\"\n---\n\nBody.\n")
+
+    schema = detect_frontmatter_schema(vault.root)
+
+    ctx = RunContext(spec=RunSpec(
+        topic="Test",
+        vault=vault,
+        provider=FakeProvider(),
+        bus=EventBus(),
+        run_id="test",
+    ))
+    ctx.domain = "general"
+    ctx.frontmatter_schema = schema
+
+    fm = build_frontmatter(ctx, tags=["art"])
+    parsed = _parse_frontmatter_yaml(fm)
+    # note: "" must be present — round-tripped from the vault's convention
+    assert "note" in parsed, f"note key must be present in {fm}"
+    assert parsed["note"] == "", f"note must be empty string, got {parsed['note']!r}"

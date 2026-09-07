@@ -162,10 +162,18 @@ class LogMessage(Event):
     text: str = ""
 
 
+@dataclass(frozen=True)
+class ThemeMinted(Event):
+    kind: Literal["theme", "type"] = "theme"
+    minted: tuple[str, ...] = ()
+    registry_size: int = 0
+
+
 __all__ = [
     "Stage", "Event", "RunStarted", "PreflightDeclared", "ManifestWritten",
     "SectionStarted", "SectionCompleted", "SectionFailed", "StageEntered",
     "StageCompleted", "ToolInvoked", "ToolReturned", "WordCountChecked",
-    "TagsProposed", "TagsValidated", "SchemaDetected", "LinkCandidatesFound",
-    "MocUpdated", "NoteWritten", "RunFailed", "RunComplete", "LogMessage",
+    "TagsProposed", "TagsValidated", "SchemaDetected", "ThemeMinted",
+    "LinkCandidatesFound", "MocUpdated", "NoteWritten", "RunFailed",
+    "RunComplete", "LogMessage",
 ]

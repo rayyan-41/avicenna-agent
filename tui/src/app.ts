@@ -999,6 +999,16 @@ export class App {
         this.write(`frontmatter schema: ${list('keys').join(', ')} (source: ${str('source')})`);
         return;
 
+      case 'ThemeMinted': {
+        const minted = list('minted');
+        const kind = str('kind');
+        this.write(
+          `${minted.length} new ${kind}${minted.length !== 1 ? 's' : ''} minted: ` +
+            `${minted.join(', ')} (registry: ${num('registry_size')} ${kind}s)`,
+        );
+        return;
+      }
+
       case 'LinkCandidatesFound':
         this.write(`${num('count')} link candidates found`);
         return;
