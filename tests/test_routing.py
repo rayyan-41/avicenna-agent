@@ -162,6 +162,8 @@ def _make_vault(tmp_path: Path, agents: list[tuple[str, str]]) -> Vault:
             f"type: content\ndomain: {domain}\n---\n\nbody\n",
             encoding="utf-8",
         )
+        # Create domain folders so derived domains match the taxonomy.
+        (tmp_path / domain.replace("-", " ").title()).mkdir(exist_ok=True)
     clear_cache()
     return Vault.load(tmp_path)
 

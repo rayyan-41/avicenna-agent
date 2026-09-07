@@ -106,6 +106,11 @@ def _scaffold_with_taxonomy(
             encoding="utf-8",
             newline="\n",
         )
+        # Create domain folder so derived domains match the taxonomy.
+        domain_dir = root / domain.replace("-", " ").title()
+        domain_dir.mkdir(exist_ok=True)
+        for cat in taxonomy.get("domains", {}).get(domain, []):
+            (domain_dir / cat).mkdir(exist_ok=True)
     return Vault.load(root)
 
 

@@ -202,7 +202,7 @@ class Bridge:
         info.update(
             agentCount=len(vault.agents),
             skillCount=len(vault.skills),
-            domains=sorted(vault.taxonomy.domains),
+            domains=sorted(vault.domain_names),
             hintDomain=domain,
             hintCategory=category,
         )

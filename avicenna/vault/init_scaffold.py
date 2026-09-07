@@ -76,4 +76,19 @@ def init_vault(target: str | Path) -> Path:
     (agents_dir / "agents" / "scribe.md").write_text(SCRIBE_AGENT_MD.strip() + "\n", encoding="utf-8", newline="\n")
     (agents_dir / "mcp.json").write_text(MCP_JSON.strip() + "\n", encoding="utf-8", newline="\n")
     (tmp_dir / ".gitignore").write_text(TMP_GITIGNORE, encoding="utf-8", newline="\n")
+
+    # Create domain and category folders to match taxonomy.json. Domains are
+    # derived from the folder tree, so a scaffolded vault must have its domain
+    # directories and their category subfolders present from the start.
+    import json
+    try:
+        data = json.loads((agents_dir / "taxonomy.json").read_text("utf-8"))
+        for domain, cats in data.get("domains", {}).items():
+            domain_dir = target / domain.replace("-", " ").title()
+            domain_dir.mkdir(exist_ok=True)
+            for cat in cats:
+                (domain_dir / cat).mkdir(exist_ok=True)
+    except (OSError, json.JSONDecodeError):
+        pass
+
     return target

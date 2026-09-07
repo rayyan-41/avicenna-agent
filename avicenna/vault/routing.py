@@ -135,7 +135,7 @@ def domain_vocabulary(vault: Vault) -> dict[str, dict[str, float]]:
     known_themes = {t.lower() for t in vault.taxonomy.themes}
     known_types = {t.lower() for t in vault.taxonomy.types}
     markers = {m.lower() for m in vault.taxonomy.markers}
-    domains = set(vault.taxonomy.domains)
+    domains = vault.domain_names
     vocab: dict[str, dict[str, float]] = {d: {} for d in domains}
 
     def add(domain: str, term: str, weight: float) -> None:
@@ -146,7 +146,7 @@ def domain_vocabulary(vault: Vault) -> dict[str, dict[str, float]]:
     # Static signal from the taxonomy itself.
     for domain in domains:
         add(domain, domain, W_DOMAIN)
-        for cat in vault.taxonomy.categories_for(domain):
+        for cat in vault.categories_for_domain(domain):
             if cat not in ("moc",):
                 add(domain, cat, W_CATEGORY)
 
@@ -259,9 +259,9 @@ def route_request(vault: Vault, text: str) -> AgentDef | None:
 
 
 def validate_domain(vault: Vault, domain: str) -> AgentDef:
-    if domain not in vault.taxonomy.domains:
+    if vault.resolve_domain(domain) is None:
         raise ValueError(
-            f"unknown domain {domain!r}; known: {sorted(vault.taxonomy.domains)}"
+            f"unknown domain {domain!r}; known: {sorted(vault.domain_names)}"
         )
     return vault.content_agent_for(domain)
 
@@ -275,12 +275,12 @@ def _build_classifier_prompt(vault: Vault, text: str) -> str:
     change — the list is derived, never hardcoded.
     """
     lines = ["Domains:"]
-    for domain in sorted(vault.taxonomy.domains):
-        cats = vault.taxonomy.categories_for(domain)
+    for domain in sorted(vault.domain_names):
+        cats = vault.categories_for_domain(domain)
         cat_str = ", ".join(c for c in cats if c != "moc")
         desc = ""
         for agent in vault.agents.values():
-            if agent.type == "content" and agent.domain == domain:
+            if agent.type == "content" and agent.domain and agent.domain.lower() == domain:
                 desc = agent.description
                 break
         entry = f"- {domain}"
@@ -320,7 +320,7 @@ async def classify_domain(
     from avicenna.providers.base import Message
 
     prompt = _build_classifier_prompt(vault, text)
-    known_domains = set(vault.taxonomy.domains)
+    known_domains = vault.domain_names
 
     try:
         completion = await provider.complete(
@@ -355,8 +355,8 @@ async def classify_domain(
     if not isinstance(domain, str):
         return None
 
-    if domain not in known_domains:
+    if domain.lower() not in known_domains:
         _log.debug("classify_domain: unknown domain %r", domain)
         return None
 
-    return domain
+    return domain.lower()

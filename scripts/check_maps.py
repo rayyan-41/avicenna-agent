@@ -7,6 +7,13 @@ cannot land a placeholder without someone writing the sentence.
 
 Run directly: ``python scripts/check_maps.py``
 Or in fix mode: ``python scripts/check_maps.py --fix``
+
+Defect note (T31): the original inventory was built from ``git ls-files``
+(tracked files only).  A source file that existed on disk but had not been
+staged was invisible to the gate, so the gate passed at exactly the moment a
+developer checked it and failed immediately after staging — the worst possible
+timing.  The gate now inspects the working tree as it will be committed:
+tracked files *plus* untracked, non-ignored files.
 """
 
 from __future__ import annotations
@@ -58,6 +65,43 @@ def git_tracked_files() -> List[str]:
     # -z uses NUL separators; split and drop the trailing empty string.
     decoded: str = result.stdout.decode()
     return [p for p in decoded.split("\x00") if p]
+
+
+def git_untracked_files() -> List[str]:
+    """Return every untracked, non-ignored path, forward-slash separated.
+
+    ``git ls-files --others --exclude-standard`` lists files that are present
+    on disk but not staged or committed, while respecting .gitignore.  A file
+    that would appear on the next ``git add -A`` must be visible to the gate,
+    or the gate passes now and fails after staging — the worst possible timing.
+    """
+    result = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard", "-z"],
+        capture_output=True,
+        cwd=ROOT,
+        check=True,
+    )
+    decoded: str = result.stdout.decode()
+    return [p for p in decoded.split("\x00") if p]
+
+
+def git_repository_files() -> Tuple[List[str], Set[str]]:
+    """Return the full working-tree file set and the set of tracked paths.
+
+    The gate inspects the working tree as it will be committed, not just the
+    index.  Untracked-but-not-ignored files are included because a subsequent
+    ``git add -A`` would pick them up, and the gate must catch a missing map
+    row *before* staging rather than after.
+
+    Returns ``(all_files, tracked)`` where ``tracked`` is the set of paths
+    already in the index so callers can annotate untracked findings.
+    """
+    tracked: List[str] = git_tracked_files()
+    untracked: List[str] = git_untracked_files()
+    tracked_set: Set[str] = set(tracked)
+    all_files: List[str] = list(tracked_set | set(untracked))
+    all_files.sort()
+    return all_files, tracked_set
 
 
 # ---------------------------------------------------------------------------
@@ -263,9 +307,16 @@ def check_marker_block(map_path: Path) -> List[str]:
 
 
 def check_inventory_parity(
-    mappable: Dict[str, List[str]], known_maps: List[Path]
+    mappable: Dict[str, List[str]],
+    known_maps: List[Path],
+    tracked: Set[str] | None = None,
 ) -> List[str]:
-    """INVENTORY PARITY: filenames in the table equal files on disk."""
+    """INVENTORY PARITY: filenames in the table equal files on disk.
+
+    When *tracked* is provided, findings concerning untracked files are
+    annotated so the message explains why the gate is reporting on a file
+    the developer has not yet staged.
+    """
     errors: List[str] = []
     for map_path in known_maps:
         rel_str: str = _posix_rel(map_path)
@@ -283,11 +334,21 @@ def check_inventory_parity(
         missing: Set[str] = actual - listed
         extra: Set[str] = listed - actual
         for f in sorted(missing):
-            errors.append(f"::error file={rel_str}::Missing row for {f}")
+            suffix: str = ""
+            if tracked is not None and _file_rel(dirpath, f) not in tracked:
+                suffix = " (untracked)"
+            errors.append(f"::error file={rel_str}::Missing row for {f}{suffix}")
         for f in sorted(extra):
             errors.append(f"::error file={rel_str}::Extra row for {f} (file not in directory)")
 
     return errors
+
+
+def _file_rel(dirpath: str, filename: str) -> str:
+    """Build a forward-slash relative path for a file in *dirpath*."""
+    if dirpath == ".":
+        return filename
+    return f"{dirpath}/{filename}"
 
 
 def check_placeholders(known_maps: List[Path]) -> List[str]:
@@ -371,9 +432,9 @@ def fix_maps(mappable: Dict[str, List[str]], known_maps: List[Path]) -> None:
 
 
 def discover_maps() -> List[Path]:
-    """Find every MAP.md tracked by git."""
+    """Find every MAP.md in the working tree (tracked or untracked, non-ignored)."""
     result = subprocess.run(
-        ["git", "ls-files", "-z"],
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
         capture_output=True,
         cwd=ROOT,
         check=True,
@@ -395,8 +456,8 @@ def main() -> int:
     """Entry point. Returns 0 on success, 1 on any violation."""
     fix: bool = "--fix" in sys.argv
 
-    tracked: List[str] = git_tracked_files()
-    mappable: Dict[str, List[str]] = mappable_files(tracked)
+    all_files, tracked = git_repository_files()
+    mappable: Dict[str, List[str]] = mappable_files(all_files)
     known_maps: List[Path] = discover_maps()
 
     if fix:
@@ -408,7 +469,7 @@ def main() -> int:
     errors.extend(check_coverage(mappable))
     for map_path in known_maps:
         errors.extend(check_marker_block(map_path))
-    errors.extend(check_inventory_parity(mappable, known_maps))
+    errors.extend(check_inventory_parity(mappable, known_maps, tracked))
     errors.extend(check_placeholders(known_maps))
 
     if errors:

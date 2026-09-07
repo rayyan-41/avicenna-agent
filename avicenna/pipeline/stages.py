@@ -985,22 +985,24 @@ class TaggingStage(PipelineStage):
 def _taxonomy_hint(ctx: RunContext) -> str:
     """Build a taxonomy options hint for constrained tagger retries.
 
-    Reads from the vault's taxonomy.json (never hardcoded) so each vault's
-    own vocabulary is what the tagger sees.
+    Reads categories from the vault's derived folder set and other taxonomy
+    fields from taxonomy.json so each vault's own vocabulary is what the
+    tagger sees.
     """
-    taxonomy = getattr(ctx.spec.vault, "taxonomy", None)
+    vault = ctx.spec.vault
+    taxonomy = getattr(vault, "taxonomy", None)
     if taxonomy is None or not ctx.domain:
         return ""
-    try:
-        categories = taxonomy.categories_for(ctx.domain)
-    except Exception:
-        categories = []
+    categories = vault.categories_for_domain(ctx.domain)
+    # Include universal categories for completeness in the hint.
+    universal = list(getattr(taxonomy, "universal_categories", []))
+    all_cats = [*categories, *universal] if universal else categories
     types = list(taxonomy.types) if hasattr(taxonomy, "types") else []
     themes = list(taxonomy.themes) if hasattr(taxonomy, "themes") else []
     lines = [
         f"\nValid tags for the routed domain ({ctx.domain}):",
         f"  Domain (exactly 1): {ctx.domain}",
-        f"  Category (exactly 1): {', '.join(categories)}" if categories else "  Category: (none available)",
+        f"  Category (exactly 1): {', '.join(all_cats)}" if all_cats else "  Category: (none available)",
         f"  Type (exactly 1): {', '.join(types)}" if types else "  Type: (none available)",
         f"  Themes (1-3): {', '.join(themes)}" if themes else "  Themes: (none available)",
         "  Entities (0-6): open vocabulary",
@@ -1033,10 +1035,8 @@ def _build_floor_tags(ctx: RunContext) -> list[str]:
     taxonomy = getattr(ctx.spec.vault, "taxonomy", None)
     if taxonomy is None or not ctx.domain:
         return []
-    try:
-        categories = taxonomy.categories_for(ctx.domain)
-    except Exception:
-        categories = []
+    # Categories come from the vault's folder tree, not taxonomy.json.
+    categories = ctx.spec.vault.categories_for_domain(ctx.domain)
     if not categories:
         return []
     types = list(taxonomy.types) if hasattr(taxonomy, "types") else []

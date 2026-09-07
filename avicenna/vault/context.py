@@ -132,17 +132,25 @@ class VaultContext:
         if not parts:
             return (None, None)
 
-        taxonomy = getattr(vault, "taxonomy", None)
-        if taxonomy is None:
-            return (None, None)
-
-        domain = parts[0].lower()
-        if domain not in getattr(taxonomy, "domains", {}):
-            return (None, None)
+        # Use the derived domain set (from the folder tree) if available,
+        # falling back to taxonomy.domains for backward compatibility.
+        domain = parts[0]
+        derived: set[str] | None = getattr(vault, "domain_names", None)
+        if derived is not None:
+            if domain.lower() not in derived:
+                return (None, None)
+        else:
+            taxonomy = getattr(vault, "taxonomy", None)
+            if taxonomy is None:
+                return (None, None)
+            if domain.lower() not in getattr(taxonomy, "domains", {}):
+                return (None, None)
 
         category = None
         try:
-            category = taxonomy.category_for_path("/".join(parts))
+            taxonomy = getattr(vault, "taxonomy", None)
+            if taxonomy is not None:
+                category = taxonomy.category_for_path("/".join(parts))
         except Exception:  # noqa: BLE001 - a hint must never break a run
             category = None
-        return (domain, category)
+        return (domain.lower(), category)

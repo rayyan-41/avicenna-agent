@@ -44,6 +44,7 @@ def _vault(tmp_path: Path) -> Vault:
     (tmp_path / ".agents" / "agents" / "scribe.md").write_text(
         "---\nname: scribe\ndescription: general agent\ntype: content\n"
         "domain: general\n---\n\nbody\n", encoding="utf-8")
+    (tmp_path / "General").mkdir(exist_ok=True)
     return Vault.load(tmp_path)
 
 
