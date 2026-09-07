@@ -21,23 +21,35 @@ _log = logging.getLogger(__name__)
 _DOMAIN_EXCLUDE: frozenset[str] = frozenset({"_tmp"})
 
 
-def _derive_domains(root: Path, exclude: frozenset[str] = _DOMAIN_EXCLUDE) -> dict[str, list[str]]:
+def _is_excluded(name: str) -> bool:
+    """Dotted and ``_``-prefixed directories are never domains or categories."""
+    return name.startswith(".") or name.startswith("_")
+
+
+def _derive_domains(
+    root: Path,
+    exclude: frozenset[str] = _DOMAIN_EXCLUDE,
+    *,
+    user_exclude: frozenset[str] = frozenset(),
+) -> dict[str, list[str]]:
     """Derive domains from the vault root's subdirectories.
 
-    Dotted directories and anything in *exclude* are skipped.
-    Returns ``{canonical_folder_name: [category_names]}`` where
-    category names are the immediate subdirectories of each domain folder
-    (excluding dotted directories).
+    Dotted directories, ``_``-prefixed directories, and anything in
+    *exclude* or *user_exclude* are skipped for both domains and
+    categories.  Returns ``{canonical_folder_name: [category_names]}``
+    where category names are the immediate subdirectories of each domain
+    folder (excluding dotted and ``_``-prefixed directories).
     """
+    combined = exclude | user_exclude
     domains: dict[str, list[str]] = {}
     for child in sorted(root.iterdir()):
         if not child.is_dir():
             continue
-        if child.name.startswith(".") or child.name in exclude:
+        if _is_excluded(child.name) or child.name in combined:
             continue
         cats = sorted(
             sub.name for sub in child.iterdir()
-            if sub.is_dir() and not sub.name.startswith(".")
+            if sub.is_dir() and not _is_excluded(sub.name) and sub.name not in combined
         )
         domains[child.name] = cats
     return domains
@@ -75,6 +87,17 @@ class Vault:
         for canonical in self._derived_domains:
             if canonical.lower() == lower:
                 return lower
+        return None
+
+    def resolve_domain_dir(self, name: str) -> Path | None:
+        """Return the on-disk directory for *domain*, or ``None``.
+
+        Case-insensitive and tolerates ``"-"`` vs ``" "`` differences.
+        """
+        norm = name.replace("-", " ").lower()
+        for child in self.root.iterdir():
+            if child.is_dir() and child.name.replace("-", " ").lower() == norm:
+                return child
         return None
 
     def categories_for_domain(self, domain: str) -> list[str]:
@@ -117,7 +140,8 @@ class Vault:
         register_vault_tools(root, reg)
         tmp = root / "_tmp"
         tmp.mkdir(exist_ok=True)
-        derived = _derive_domains(root)
+        user_excl = frozenset(taxonomy.exclude_from_derivation)
+        derived = _derive_domains(root, user_exclude=user_excl)
         vault = cls(
             root, protocol, agents, skills, taxonomy, reg, tmp,
             _derived_domains=derived,

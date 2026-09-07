@@ -55,32 +55,31 @@ def _safe_filename(title: str) -> str:
 # directory would appear beside the real one.  A single helper now resolves the
 # canonical directory for both call sites.
 
-def _canonical_domain_dir(vault: Vault, domain: str) -> Path:
+def _canonical_domain_dir(vault: Vault, domain: str) -> Path | None:
     """Resolve the vault's canonical directory name for *domain*.
 
     If a directory at the vault root already matches *domain*
     case-insensitively (tolerating ``"-"`` vs ``" "``), return THAT
     directory — canonical by construction, correct on any filesystem.
 
-    When no such directory exists, fall back to Title Case so a scaffolded
-    vault works on its first run.
+    When no such directory exists, return ``None``.  Under the derivation
+    doctrine a domain with no folder is a routing failure, not licence to
+    invent structure in the user's vault.
     """
     norm = domain.replace("-", " ").lower()
     for child in vault.root.iterdir():
         if child.is_dir() and child.name.replace("-", " ").lower() == norm:
             return child
-    return vault.root / domain.replace("-", " ").title()
+    return None
 
 
 def _note_destination(ctx: RunContext) -> Path:
     """Where the finished note belongs in the vault.
 
-    Domain folders are Title Case at the vault root (Art/, History/, ...).
-    Created if absent so a scaffolded vault works on its first run.
-
-    Uses `_canonical_domain_dir` so that a domain like "reason" resolves to
-    an existing "Reason/" directory rather than creating a second, differently
-    cased one.
+    Domain folders are resolved from the vault's actual folder tree.
+    When the domain does not map to an existing directory the run is
+    aborted — the harness must never create a domain folder to satisfy a
+    route.
 
     Never returns a path that already holds a note. The destination derives
     from the topic alone, so running the same topic twice — or two topics that
@@ -88,8 +87,17 @@ def _note_destination(ctx: RunContext) -> Path:
     out of existence with no event and no backup. Losing a note in the right
     vault is the same class of failure as writing into the wrong one.
     """
-    folder = _canonical_domain_dir(ctx.spec.vault, ctx.domain or "general")
-    folder.mkdir(parents=True, exist_ok=True)
+    domain = ctx.domain
+    if not domain:
+        raise PipelineAbort("assembly", "no domain resolved for this run")
+    folder = _canonical_domain_dir(ctx.spec.vault, domain)
+    if folder is None:
+        available = sorted(ctx.spec.vault.domain_names)
+        raise PipelineAbort(
+            "assembly",
+            f"domain {domain!r} has no folder in the vault; "
+            f"available domains: {', '.join(available)}",
+        )
 
     candidate = folder / _safe_filename(ctx.spec.topic)
     if not candidate.exists():
@@ -1276,6 +1284,11 @@ class MocStage(PipelineStage):
         # vault's own casing. ctx.domain is the lowercase taxonomy key; the
         # filesystem name may differ (Reason/ not reason/).
         domain_dir = _canonical_domain_dir(ctx.spec.vault, ctx.domain)
+        if domain_dir is None:
+            await _skip(ctx, "update_moc",
+                        f"domain {ctx.domain!r} has no folder; MOC skipped")
+            await ctx.emit(MocUpdated, result="SKIPPED", path=str(ctx.note_path or ""))
+            return
         result = await _invoke_optional(ctx, "update_moc",
             Domain=domain_dir.name,
             NoteTitle=ctx.spec.topic,

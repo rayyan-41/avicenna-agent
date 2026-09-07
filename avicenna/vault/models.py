@@ -71,6 +71,7 @@ class Taxonomy:
     types: list[str]
     themes: list[str]
     reserved_modifiers: list[str]
+    exclude_from_derivation: list[str] = field(default_factory=list)
 
     @classmethod
     def load(cls, path: Path) -> Taxonomy:
@@ -82,6 +83,7 @@ class Taxonomy:
                 universal_categories=data.get("universalCategories", []),
                 folder_map=data.get("folderMap", {}), types=data["types"],
                 themes=data["themes"], reserved_modifiers=data.get("reservedModifiers", []),
+                exclude_from_derivation=data.get("excludeFromDerivation", []),
             )
         except KeyError as exc:
             raise VaultConfigError(f"{path}: taxonomy missing required key {exc}") from exc

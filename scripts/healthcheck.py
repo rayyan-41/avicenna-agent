@@ -288,6 +288,17 @@ def probe_vault(vault_path: Path) -> ProbeResult:
     details.append(f"skills: {len(v.skills)}")
     details.append(f"taxonomy domains: {len(v.taxonomy.domains)}")
 
+    # Derived domains and categories — what the harness will actually use.
+    for domain in sorted(v._derived_domains):
+        cats = v._derived_domains[domain]
+        cat_str = ", ".join(cats) if cats else "(none)"
+        details.append(f"  {domain}: {cat_str}")
+
+    if v.taxonomy.exclude_from_derivation:
+        details.append(
+            f"excluded from derivation: {', '.join(v.taxonomy.exclude_from_derivation)}"
+        )
+
     summary = (f"{len(v.agents)} agents, {len(v.skills)} skills, "
                f"{len(v.taxonomy.domains)} domains")
     return ProbeResult("VAULT", Status.OK, summary, details)

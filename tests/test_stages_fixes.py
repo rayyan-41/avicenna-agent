@@ -161,13 +161,13 @@ def test_lowercase_directory_is_used_not_replaced(tmp_path: Path) -> None:
     assert resolved == root / "reason"
 
 
-def test_new_domain_is_title_cased(tmp_path: Path) -> None:
-    """A domain with no directory yet: created as Title Case (regression)."""
+def test_new_domain_returns_none(tmp_path: Path) -> None:
+    """A domain with no directory returns None — the harness must not invent one."""
     root = tmp_path / "vault"
     root.mkdir()
 
     resolved = _canonical_domain_dir(type("V", (), {"root": root})(), "history")
-    assert resolved == root / "History"
+    assert resolved is None
 
 
 def test_hyphenated_domain_resolves_to_existing_folder(tmp_path: Path) -> None:
