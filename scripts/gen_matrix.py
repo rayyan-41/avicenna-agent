@@ -201,6 +201,89 @@ def _vault_note_index(vault: Vault) -> dict[str, Path]:
     return index
 
 
+# ---- MOC detection --------------------------------------------------------
+
+# MOC detection uses frontmatter tags, not filenames.
+#
+# The original code searched for *MOC*.md and *moc*.md, which matched nothing
+# because the vault names its MOCs "Map of Contents - <Domain>.md" — no "MOC"
+# substring in any case.  Every cell reported no_moc_file, and the branch that
+# checks whether the note was actually listed in the MOC was never reached.
+# A harness assertion masked the exact defect it existed to catch.
+#
+# The vault's own tool (.agents/tools/update_moc.ps1, function Write-Moc)
+# writes every MOC with `tags: [<domain>, moc, cli]`, and Get-DomainGroups
+# skips a note when tags[1] -eq 'moc'.  So "has moc in its frontmatter tags"
+# is the vault's actual definition of a MOC — the one the tool itself relies
+# on.  Detecting by tag is vault-agnostic: any vault that follows the same
+# tagging convention gets correct MOC detection regardless of filename.
+
+
+def _no_moc_domains(taxonomy: Taxonomy) -> set[str]:
+    """Domains that have declared they keep no Map of Content.
+
+    Read from taxonomy.json, because which domains keep a MOC is vault policy,
+    not the harness's business.
+    """
+    raw = getattr(taxonomy, "no_moc", None)
+    if raw is None:
+        raw = getattr(taxonomy, "raw", {}).get("noMoc") if hasattr(taxonomy, "raw") else None
+    return {str(d).lower() for d in raw} if raw else set()
+
+
+def _find_moc_files(domain_dir: Path) -> list[Path]:
+    """Identify MOC files in *domain_dir* by semantic markers, not filenames.
+
+    A file is a MOC when:
+      1. "moc" appears among its frontmatter tags (bracketed-list form), OR
+      2. (fallback) its stem contains "map of content" or "moc" as a whole
+         word — covers a MOC that has lost its tags.
+
+    Frontmatter is the leading ``---`` ... ``---`` block.  Malformed or
+    unterminated blocks are tolerated (return no tags, fall through to the
+    filename heuristic).
+    """
+    _MOC_TAG_RE = re.compile(
+        r"^tags:\s*\[(.*?)\]\s*$", re.IGNORECASE | re.MULTILINE
+    )
+    _FM_BOUNDARY = re.compile(r"^---\s*$", re.MULTILINE)
+    # "map of content(s)" or whole-word "moc" — so "Mocking Realism" does not
+    # match while "Map of Contents - Art" and "Art MOC" both do.
+    _STEM_MOC_RE = re.compile(
+        r"\bmap\s+of\s+contents?\b|\bmoc\b", re.IGNORECASE
+    )
+
+    results: list[Path] = []
+    for md in domain_dir.glob("*.md"):
+        try:
+            text = md.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+
+        # Parse frontmatter tags.
+        tags_match: list[str] = []
+        boundaries = list(_FM_BOUNDARY.finditer(text))
+        if len(boundaries) >= 2:
+            fm_block = text[boundaries[0].end() : boundaries[1].start()]
+            m = _MOC_TAG_RE.search(fm_block)
+            if m:
+                tags_match = [
+                    t.strip().lower()
+                    for t in m.group(1).split(",")
+                    if t.strip()
+                ]
+
+        if "moc" in tags_match:
+            results.append(md)
+            continue
+
+        # Filename fallback.
+        if _STEM_MOC_RE.search(md.stem):
+            results.append(md)
+
+    return results
+
+
 # ---- per-cell assertions --------------------------------------------------
 
 def _run_assertions(
@@ -247,22 +330,25 @@ def _run_assertions(
             result.failed_assertions.append(f"broken_wikilink ([[{match.group(1)}]])")
 
     # 6. Domain MOC contains an entry for the new note.
+    #    Skip for domains that have declared they keep no MOC.
     domain_folder_name = (result.domain or "general").replace("-", " ").title()
     domain_dir = vault.root / domain_folder_name
     if domain_dir.is_dir():
-        moc_files = list(domain_dir.glob("*MOC*.md")) + list(domain_dir.glob("*moc*.md"))
-        if not moc_files:
-            result.failed_assertions.append("no_moc_file")
-        else:
-            note_stem = note_path.stem.lower()
-            found_in_moc = False
-            for moc_file in moc_files:
-                moc_text = moc_file.read_text(encoding="utf-8", errors="replace").lower()
-                if note_stem in moc_text:
-                    found_in_moc = True
-                    break
-            if not found_in_moc:
-                result.failed_assertions.append("note_not_in_moc")
+        skip_moc = result.domain and result.domain.lower() in _no_moc_domains(vault.taxonomy)
+        if not skip_moc:
+            moc_files = _find_moc_files(domain_dir)
+            if not moc_files:
+                result.failed_assertions.append("no_moc_file")
+            else:
+                note_stem = note_path.stem.lower()
+                found_in_moc = False
+                for moc_file in moc_files:
+                    moc_text = moc_file.read_text(encoding="utf-8", errors="replace").lower()
+                    if note_stem in moc_text:
+                        found_in_moc = True
+                        break
+                if not found_in_moc:
+                    result.failed_assertions.append("note_not_in_moc")
     else:
         result.failed_assertions.append("domain_folder_missing")
 
