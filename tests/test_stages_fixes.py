@@ -423,7 +423,9 @@ async def test_linker_called_with_candidates(tmp_path: Path) -> None:
         if "genuinely related" in prompt:
             agents_called.append("linker")
             note = prompt.split("\n\n", 1)[-1]
-            return Completion(text=note.replace("this section", "this [[section]]", 1))
+            # Link to a note that exists in the vault (created below), so the
+            # wikilink validation does not strip it.
+            return Completion(text=note.replace("this section", "this [[Section]]", 1))
         return Completion(text=BODY.strip())
 
     # Scaffold with a fake get_related_notes tool that returns candidates.
@@ -457,11 +459,17 @@ async def test_linker_called_with_candidates(tmp_path: Path) -> None:
             )
 
     vault = _scaffold(tmp_path, agents=("tagger", "linker"))
+    # Pre-create a note the linker can resolve against, so the wikilink
+    # validation does not strip the link.
+    section_note = vault.root / "General" / "Section.md"
+    section_note.parent.mkdir(parents=True, exist_ok=True)
+    section_note.write_text("# Section\n\nRelated note.", encoding="utf-8", newline="\n")
     vault.tools.register(FakeRelatedTool())
     events = await _run(vault, script=script_with_candidates)
 
     assert "linker" in agents_called, "linker must be called when candidates exist"
-    body = _note(vault).read_text(encoding="utf-8")
+    # Find the generated note (not Section.md).
+    body = (vault.root / "General" / "The Epistemic Gap and the Necessity of Revelation.md").read_text(encoding="utf-8")
     assert "[[" in body, "the linker's wikilinks must reach the note"
 
 

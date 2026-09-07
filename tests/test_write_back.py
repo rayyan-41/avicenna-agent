@@ -95,48 +95,58 @@ class TestUnwrapModelOutput:
 
     def test_plain_output_passes_through(self) -> None:
         text = DISK_FM + BODY
-        assert _unwrap_model_output(text) == text
+        result, did_unwrap = _unwrap_model_output(text)
+        assert result == text
+        assert did_unwrap is False
 
     def test_strips_chat_preamble_before_frontmatter(self) -> None:
         wrapped = "Here is the corrected note:\n\n" + DISK_FM + BODY
-        assert _unwrap_model_output(wrapped) == DISK_FM + BODY
+        result, _ = _unwrap_model_output(wrapped)
+        assert result == DISK_FM + BODY
 
     def test_unwraps_markdown_fence(self) -> None:
         inner = DISK_FM + BODY
         wrapped = "```markdown\n" + inner + "```"
-        assert _unwrap_model_output(wrapped).strip() == inner.strip()
+        result, _ = _unwrap_model_output(wrapped)
+        assert result.strip() == inner.strip()
 
     def test_unwraps_fence_with_preamble(self) -> None:
         inner = DISK_FM + BODY
         wrapped = "Here is the corrected note:\n\n```markdown\n" + inner + "```"
-        assert _unwrap_model_output(wrapped).strip() == inner.strip()
+        result, _ = _unwrap_model_output(wrapped)
+        assert result.strip() == inner.strip()
 
     def test_unwraps_tilde_fence(self) -> None:
         inner = DISK_FM + BODY
         wrapped = "~~~md\n" + inner + "~~~"
-        assert _unwrap_model_output(wrapped).strip() == inner.strip()
+        result, _ = _unwrap_model_output(wrapped)
+        assert result.strip() == inner.strip()
 
     def test_unwraps_bare_fence_no_info_string(self) -> None:
         inner = DISK_FM + BODY
         wrapped = "```\n" + inner + "```"
-        assert _unwrap_model_output(wrapped).strip() == inner.strip()
+        result, _ = _unwrap_model_output(wrapped)
+        assert result.strip() == inner.strip()
 
     def test_preserves_legitimate_code_block_mid_note(self) -> None:
         """A fenced code block inside the note body must not be unwrapped."""
         note = DISK_FM + BODY + "\n```python\nprint('hello')\n```\n"
         # The inner code block does NOT wrap the entire output, so the note
         # should pass through unchanged.
-        assert _unwrap_model_output(note) == note
+        result, _ = _unwrap_model_output(note)
+        assert result == note
 
     def test_idempotent(self) -> None:
         inner = DISK_FM + BODY
         wrapped = "Here is the corrected note:\n\n```markdown\n" + inner + "```"
-        once = _unwrap_model_output(wrapped)
-        twice = _unwrap_model_output(once)
-        assert once == twice
+        once_text, _ = _unwrap_model_output(wrapped)
+        twice_text, _ = _unwrap_model_output(once_text)
+        assert once_text == twice_text
 
     def test_empty_input(self) -> None:
-        assert _unwrap_model_output("") == ""
+        result, did_unwrap = _unwrap_model_output("")
+        assert result == ""
+        assert did_unwrap is False
 
 
 # --- _write_back ------------------------------------------------------------

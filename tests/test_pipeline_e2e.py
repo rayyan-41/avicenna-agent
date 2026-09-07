@@ -60,8 +60,10 @@ def _script(system: str, messages: list[Any]) -> Completion:
         return Completion(text="Reviewed the note.\nTAGS: philosophy, epistemology, revelation")
     if "genuinely related" in prompt:
         # The linker returns the whole note with a link woven in.
+        # The target must be a note that exists in the vault (created by the
+        # test before running) so the wikilink validation does not strip it.
         note = prompt.split("\n\n", 1)[-1]
-        return Completion(text=note.replace("this section", "this [[section]]", 1))
+        return Completion(text=note.replace("this section", "this [[Section]]", 1))
     if "formatting corrected" in prompt:
         return Completion(text=prompt.split("\n\n", 1)[-1])
     if "Assemble this into one continuous note" in prompt:
@@ -162,9 +164,16 @@ async def test_tagger_output_reaches_the_note(tmp_path: Path) -> None:
 async def test_linker_output_reaches_the_note(tmp_path: Path) -> None:
     """A linked note that never reaches disk is the orphan we exist to prevent."""
     vault = _scaffold(tmp_path, agents=("tagger", "linker"))
+    # Pre-create a note the linker can resolve against, so the wikilink
+    # validation does not strip the link.
+    section_note = vault.root / "General" / "Section.md"
+    section_note.parent.mkdir(parents=True, exist_ok=True)
+    section_note.write_text("# Section\n\nRelated note.", encoding="utf-8", newline="\n")
     await _run(vault)
 
-    body = _note(vault).read_text(encoding="utf-8")
+    # Find the generated note (not Section.md).
+    generated = vault.root / "General" / "The Epistemic Gap and the Necessity of Revelation.md"
+    body = generated.read_text(encoding="utf-8")
     assert "[[" in body, "the linker's wikilinks were discarded"
 
 

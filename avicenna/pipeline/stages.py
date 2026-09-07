@@ -203,16 +203,122 @@ def _render_tags(tags: list[str]) -> str:
     return "[" + ", ".join(t for t in cleaned if t) + "]"
 
 
+# A topic containing ": " produces invalid YAML frontmatter — an unquoted
+# scalar with colon-space is ambiguous YAML at best and a parse failure at
+# worst.  Every consumer (Obsidian, update_moc.ps1, get_related_notes) sees
+# a broken block.  The quoting rule belongs to the writer, not the caller's
+# luck, so all frontmatter scalars pass through this guard.
+_YAML_INDICATORS = set("- ? : , [ ] { } & * ! | > % @ `")
+_YAML_BOOL_NULL = frozenset({
+    "true", "false", "null", "~",
+    "True", "False", "Null",
+    "TRUE", "FALSE", "NULL",
+})
+
+
+def _needs_yaml_quote(value: str) -> bool:
+    """Return True when *value* must be double-quoted in a YAML scalar."""
+    if not value:
+        return True
+    if ": " in value or " #" in value or value.startswith("#"):
+        return True
+    if value[0] in _YAML_INDICATORS:
+        return True
+    if value.startswith('"') or value.startswith("'"):
+        return True
+    if "\n" in value:
+        return True
+    if value != value.strip():
+        return True
+    if value in _YAML_BOOL_NULL:
+        return True
+    try:
+        float(value)
+        return True
+    except ValueError:
+        pass
+    return False
+
+
+def _quote_yaml_scalar(value: str) -> str:
+    """Double-quote *value* for a YAML scalar when quoting is required.
+
+    Returns the value unquoted when it is safe to leave bare, so existing
+    notes stay byte-identical.
+    """
+    if not _needs_yaml_quote(value):
+        return value
+    # Collapse newlines to spaces (a title must not span lines).
+    collapsed = value.replace("\n", " ").replace("\r", "")
+    escaped = collapsed.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
 def build_frontmatter(ctx: RunContext, tags: list[str] | None = None) -> str:
     """The canonical frontmatter block for this run."""
     return (
         "---\n"
-        f"title: {ctx.spec.topic}\n"
-        f"domain: {ctx.domain or 'general'}\n"
-        f"template: {ctx.template or 'general'}\n"
+        f"title: {_quote_yaml_scalar(ctx.spec.topic)}\n"
+        f"domain: {_quote_yaml_scalar(ctx.domain or 'general')}\n"
+        f"template: {_quote_yaml_scalar(ctx.template or 'general')}\n"
         f"tags: {_render_tags(tags or [])}\n"
         "---\n"
     )
+
+
+# --- duplicate-frontmatter-in-fence ----------------------------------------
+# A live run produced this, and it reached disk verbatim:
+#
+#     ---
+#     date: YYYY-MM-DD
+#     ...
+#     ---
+#     ```markdown
+#     ---
+#     date: YYYY-MM-DD
+#     ...
+#     ---
+#
+#     # What makes an object art...
+#
+# The model emitted a frontmatter block, then a ```markdown fence containing a
+# SECOND copy of the same block plus the whole note.  Because the text opens
+# with `---`, the existing guard treated the fence as mid-note and left it.
+# `_write_back` then kept the disk frontmatter and appended a body that began
+# with a stray fence and a duplicate block.
+#
+# The fix: when the body after a leading frontmatter block consists ENTIRELY of
+# a fenced code block (opening immediately, closing at the very end), unwrap
+# that fence and return the frontmatter plus the fence's contents.  Then the
+# existing frontmatter handling in `_write_back` discards the duplicate block
+# inside the fence, exactly like any other model-supplied frontmatter.
+
+
+def _extract_body_from_frontmatter_fence(text: str) -> str | None:
+    """When *text* is frontmatter wrapping a fenced body, return the unwrapped form.
+
+    Returns ``None`` when the pattern does not match.  The pattern is narrow
+    and conservative: a legitimate note whose body contains a code block
+    followed by prose will never match because the fence does not close at
+    the very end.
+    """
+    fm = _FRONTMATTER.match(text)
+    if fm is None:
+        return None
+    remaining = text[fm.end():]
+    if not remaining.strip():
+        return None
+    for close_fence in ("```", "~~~"):
+        fence_pattern = re.compile(
+            re.escape(close_fence) + r"([a-zA-Z0-9_-]*)\r?\n"
+            r"(.+?)\r?\n?"
+            + re.escape(close_fence) + r"\s*\Z",
+            re.DOTALL,
+        )
+        m = fence_pattern.match(remaining)
+        if m:
+            return fm.group(0) + m.group(2)
+    return None
 
 
 def apply_tags(text: str, ctx: RunContext, tags: list[str]) -> str:
@@ -234,7 +340,7 @@ def apply_tags(text: str, ctx: RunContext, tags: list[str]) -> str:
     return block + body
 
 
-def _unwrap_model_output(text: str) -> str:
+def _unwrap_model_output(text: str) -> tuple[str, bool]:
     """Strip chat preamble and code fences a chatty model wraps around a note.
 
     Ministral-8b (and models like it) commonly prepend "Here is the corrected
@@ -245,9 +351,28 @@ def _unwrap_model_output(text: str) -> str:
     unchanged.  Idempotent — f(f(x)) == f(x) — because the inner content of
     an already-unwrapped note never starts with a fence that closes at the
     very end (a legitimate note continues past any code block it contains).
+
+    Returns ``(text, unwrapped_fence)`` where *unwrapped_fence* is ``True``
+    when a fenced body after frontmatter was stripped — a model defect the
+    caller should warn about.
     """
     if not text:
-        return text
+        return text, False
+
+    did_unwrap_fence = False
+
+    # --- frontmatter wrapping a fenced body ----------------------------------
+    # A live run produced a frontmatter block followed by a ```markdown fence
+    # containing a SECOND copy of the same block plus the whole note.  Because
+    # the text opened with `---`, the guard below treated the fence as mid-note
+    # and left it.  When the body after a leading frontmatter block consists
+    # ENTIRELY of a fenced code block (opening immediately, closing at the very
+    # end), unwrap that fence and re-enter so a duplicate block inside is
+    # discarded like any other model-supplied frontmatter.
+    extracted = _extract_body_from_frontmatter_fence(text)
+    if extracted is not None:
+        did_unwrap_fence = True
+        text = extracted
 
     # --- unwrap a fenced block that IS the bulk of the output ---------------
     # Only match when the fence opens the content (possibly after a preamble)
@@ -272,7 +397,7 @@ def _unwrap_model_output(text: str) -> str:
             if not preamble or not (
                 preamble.startswith("---") or preamble.startswith("#")
             ):
-                return m.group("body")
+                return m.group("body"), did_unwrap_fence
 
     # --- drop a leading conversational preamble -----------------------------
     # Any lines before the first line that is exactly "---" (frontmatter open)
@@ -283,10 +408,10 @@ def _unwrap_model_output(text: str) -> str:
         stripped = line.strip()
         if stripped == "---" or stripped.startswith("#"):
             if i > 0:
-                return "\n".join(lines[i:])
+                return "\n".join(lines[i:]), did_unwrap_fence
             break
 
-    return text
+    return text, did_unwrap_fence
 
 
 async def _write_back(ctx: RunContext, stage: str, produced: str) -> bool:
@@ -303,7 +428,14 @@ async def _write_back(ctx: RunContext, stage: str, produced: str) -> bool:
     budget.
     """
     assert ctx.note_path is not None
-    candidate = _unwrap_model_output(produced).strip()
+    candidate, did_unwrap_fence = _unwrap_model_output(produced)
+    candidate = candidate.strip()
+    if did_unwrap_fence:
+        await ctx.emit(
+            LogMessage, level="warning",
+            text=f"{stage}: unwrapped a fenced code block that wrapped the body "
+                 "after the frontmatter block (model defect)",
+        )
     if not candidate:
         await ctx.emit(LogMessage, level="warning",
                        text=f"{stage} returned nothing; note left unchanged")
@@ -987,10 +1119,98 @@ class FormatterStage(PipelineStage):
         await _write_back(ctx, "formatter", output)
 
 
+# --- wikilink validation ----------------------------------------------------
+# The weaver's transition prose names the upcoming section; the linker then
+# wraps those names in [[ ]] as though they were notes.  The prompt says "Do
+# not invent notes that do not exist" and it was given a real candidate list.
+# Asking the model more firmly is not a fix.  Instead, after the linker returns
+# we resolve every [[target]] against the vault's note index: a link whose
+# target is not an existing note is unwrapped to its plain text.  A section
+# heading the weaver named is kept as prose; only the spurious brackets are
+# removed.
+
+_WIKILINK = re.compile(r"\[\[([^\]]+)\]\]")
+
+
+def _build_vault_notes_index(vault: Vault, exclude: Path | None = None) -> dict[str, str]:
+    """Build a case-insensitive index of note stems from the vault.
+
+    Returns ``{lowercase_stem: display_name}`` for every ``.md`` file in the
+    vault (excluding ``.agents/`` and the file at *exclude*).
+    """
+    index: dict[str, str] = {}
+    for p in vault.root.rglob("*.md"):
+        if ".agents" in p.parts:
+            continue
+        if exclude is not None and p.resolve() == exclude.resolve():
+            continue
+        if p.parent == vault.root and p.name == "AGENTS.md":
+            continue
+        index[p.stem.lower()] = p.stem
+    return index
+
+
+async def _resolve_wikilinks(text: str, vault: Vault, note_path: Path, ctx: RunContext) -> str:
+    """Validate every ``[[target]]`` in *text* against the vault's note index.
+
+    A link to an existing note survives untouched.  A ``[[#heading]]`` internal
+    link is left alone (it is not a note link).  ``[[target|alias]]`` is
+    resolved by *target*.  An unresolvable link is unwrapped to its plain text
+    — the words stay, only the brackets are removed.
+
+    Emits one warning naming how many links were dropped (with examples) and
+    one info message with the count that resolved.
+    """
+    index = _build_vault_notes_index(vault, exclude=note_path)
+    dropped: list[str] = []
+    resolved_count = 0
+
+    def _replace(m: re.Match[str]) -> str:
+        nonlocal resolved_count
+        inner = m.group(1)
+        # [[#heading]] — internal link, not a note reference.
+        if inner.startswith("#"):
+            return m.group(0)
+        # [[target|alias]] — resolve target, keep alias.
+        if "|" in inner:
+            target, alias = inner.split("|", 1)
+            target = target.strip()
+            if target and target.lower() in index:
+                resolved_count += 1
+                return m.group(0)
+            dropped.append(target or inner)
+            return alias
+        # Plain [[target]].
+        target = inner.strip()
+        if target and target.lower() in index:
+            resolved_count += 1
+            return m.group(0)
+        dropped.append(target or inner)
+        return target
+
+    result = _WIKILINK.sub(_replace, text)
+    if dropped:
+        sample = ", ".join(f"[[{d}]]" for d in dropped[:5])
+        await ctx.emit(
+            LogMessage, level="warning",
+            text=f"linker invented {len(dropped)} wikilink(s) to non-existent notes "
+                 f"(dropped {sample})",
+        )
+    await ctx.emit(LogMessage, level="info",
+                   text=f"wikilink resolution: {resolved_count} resolved, {len(dropped)} dropped")
+    return result
+
+
 class LinkingStage(PipelineStage):
     # When get_related_notes yields 0 candidates, the linker was asked to weave
     # links against an empty candidate list and invented notes that do not exist.
     # Now we skip the model call entirely and warn the user.
+    #
+    # After the linker returns, every [[target]] is resolved against the vault's
+    # note index.  A link to a non-existent note is unwrapped to plain text so
+    # the weaver's prose is kept without the spurious brackets.  This is a
+    # guard, not the link-selection algorithm — the design for choosing targets
+    # is deferred.
     name: Stage = "linking"
     id = "linking"
 
@@ -1030,6 +1250,9 @@ class LinkingStage(PipelineStage):
         except Exception as exc:
             await ctx.emit(LogMessage, level="error", text=f"linking failed: {exc}")
             return
+        # Resolve wikilinks against the vault's note index before writing.
+        # A link to a non-existent note is unwrapped to its plain text.
+        output = await _resolve_wikilinks(output, ctx.spec.vault, ctx.note_path, ctx)
         # A linked note that never reaches disk is the orphan this program
         # exists to prevent; the return value used to be thrown away entirely.
         if await _write_back(ctx, "linker", output):
