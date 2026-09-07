@@ -883,8 +883,20 @@ def _build_floor_tags(ctx: RunContext) -> list[str]:
 
     Returns [] when the taxonomy lacks the information needed to build one.
     The array follows the positional contract: [domain, category, type,
-    themes..., cli]. Never invents values — everything is drawn from the
+    themes..., marker]. Never invents values — everything is drawn from the
     taxonomy.
+
+    Universal categories (like "moc") are EXCLUDED, not preferred.  An earlier
+    version preferred them, which meant "moc" was chosen for every domain.
+    Because update_moc.ps1 skips notes whose tags[1] is "moc"
+    (`if ($tags[1] -eq 'moc') { continue }`), tagging an ordinary note with
+    "moc" in position 1 silently un-lists it — the note ships but never enters
+    its Map of Content.  The validator also rejects "moc" alongside a topical
+    category in the same array.
+
+    Exactly one marker is appended (always the taxonomy's first), not all of
+    them.  The validator requires exactly one marker; appending every marker
+    (e.g. both "cli" and "manual") always fails.
     """
     taxonomy = getattr(ctx.spec.vault, "taxonomy", None)
     if taxonomy is None or not ctx.domain:
@@ -901,14 +913,19 @@ def _build_floor_tags(ctx: RunContext) -> list[str]:
     themes = list(taxonomy.themes) if hasattr(taxonomy, "themes") else []
     markers = taxonomy.markers if hasattr(taxonomy, "markers") else ["cli"]
 
-    # Prefer a general/universal category over the alphabetically first.
+    # Exclude structural/universal categories — they are not topics.  A domain
+    # whose only category is universal cannot yield a valid floor.
     universal = set(getattr(taxonomy, "universal_categories", []))
-    category = next((c for c in categories if c in universal), categories[0])
+    topical = [c for c in categories if c not in universal]
+    if not topical:
+        return []
+    category = topical[0]
 
     floor: list[str] = [ctx.domain, category, types[0]]
     if themes:
         floor.append(themes[0])
-    floor.extend(markers)
+    # Exactly one marker, always the taxonomy's first.
+    floor.append(markers[0])
     return floor
 
 

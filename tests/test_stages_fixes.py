@@ -463,3 +463,142 @@ async def test_linker_called_with_candidates(tmp_path: Path) -> None:
     assert "linker" in agents_called, "linker must be called when candidates exist"
     body = _note(vault).read_text(encoding="utf-8")
     assert "[[" in body, "the linker's wikilinks must reach the note"
+
+
+# =============================================================================
+# PART C — _build_floor_tags fixes (T26)
+# =============================================================================
+
+
+def _floor_context(
+    tmp_path: Path,
+    taxonomy: dict[str, Any],
+    domain: str = "art",
+    *,
+    content_domains: tuple[str, ...] = (),
+) -> Any:
+    """Build a minimal RunContext whose taxonomy and domain are set."""
+    from avicenna.pipeline.context import RunContext, RunSpec
+
+    vault = _scaffold_with_taxonomy(
+        tmp_path, taxonomy, content_domains=content_domains or (domain,),
+    )
+    ctx = RunContext(spec=RunSpec(
+        topic="test", vault=vault, provider=FakeProvider(),
+        bus=EventBus(), run_id="test",
+    ))
+    ctx.domain = domain
+    return ctx
+
+
+def test_floor_excludes_universal_category(tmp_path: Path) -> None:
+    """With universalCategories=["moc"], the floor must NOT use "moc"."""
+    from avicenna.pipeline.stages import _build_floor_tags
+
+    taxonomy = {
+        "version": 1,
+        "schema": {"markers": ["cli", "manual"]},
+        "domains": {
+            "general": ["note", "essay"],
+            "art": ["art-history", "art-theory", "moc"],
+            "history": ["moc"],
+        },
+        "universalCategories": ["moc"],
+        "folderMap": {},
+        "types": ["person", "essay"],
+        "themes": ["history-of-ideas", "knowledge"],
+        "reservedModifiers": [],
+    }
+    ctx = _floor_context(tmp_path, taxonomy, "art")
+    floor = _build_floor_tags(ctx)
+    assert "moc" not in floor, f"moc must be excluded from floor: {floor}"
+
+
+def test_floor_contains_exactly_one_marker_last(tmp_path: Path) -> None:
+    """The floor must contain exactly one marker, and it must be last."""
+    from avicenna.pipeline.stages import _build_floor_tags
+
+    taxonomy = {
+        "version": 1,
+        "schema": {"markers": ["cli", "manual"]},
+        "domains": {
+            "general": ["note", "essay"],
+            "art": ["art-history", "art-theory", "moc"],
+        },
+        "universalCategories": ["moc"],
+        "folderMap": {},
+        "types": ["person", "essay"],
+        "themes": ["history-of-ideas", "knowledge"],
+        "reservedModifiers": [],
+    }
+    ctx = _floor_context(tmp_path, taxonomy, "art")
+    floor = _build_floor_tags(ctx)
+    markers_in_floor = [t for t in floor if t in ("cli", "manual")]
+    assert len(markers_in_floor) == 1, f"expected exactly one marker: {floor}"
+    assert floor[-1] == markers_in_floor[0], f"marker must be last: {floor}"
+
+
+def test_floor_has_at_least_two_tags(tmp_path: Path) -> None:
+    """update_moc requires >= 2 tags to group the note."""
+    from avicenna.pipeline.stages import _build_floor_tags
+
+    taxonomy = {
+        "version": 1,
+        "schema": {"markers": ["cli"]},
+        "domains": {
+            "general": ["note", "essay"],
+            "art": ["art-history", "art-theory"],
+        },
+        "universalCategories": [],
+        "folderMap": {},
+        "types": ["person", "essay"],
+        "themes": ["history-of-ideas"],
+        "reservedModifiers": [],
+    }
+    ctx = _floor_context(tmp_path, taxonomy, "art")
+    floor = _build_floor_tags(ctx)
+    assert len(floor) >= 2, f"at least 2 tags required: {floor}"
+
+
+def test_all_universal_categories_yields_empty(tmp_path: Path) -> None:
+    """A domain whose only category is universal yields []."""
+    from avicenna.pipeline.stages import _build_floor_tags
+
+    taxonomy = {
+        "version": 1,
+        "schema": {"markers": ["cli"]},
+        "domains": {
+            "general": ["note", "essay"],
+            "misc": ["moc"],
+        },
+        "universalCategories": ["moc"],
+        "folderMap": {},
+        "types": ["person", "essay"],
+        "themes": ["knowledge"],
+        "reservedModifiers": [],
+    }
+    ctx = _floor_context(tmp_path, taxonomy, "misc")
+    floor = _build_floor_tags(ctx)
+    assert floor == [], f"all-universal domain must yield []: {floor}"
+
+
+def test_markers_come_from_taxonomy_not_literal(tmp_path: Path) -> None:
+    """A taxonomy whose first marker is something else produces that value."""
+    from avicenna.pipeline.stages import _build_floor_tags
+
+    taxonomy = {
+        "version": 1,
+        "schema": {"markers": ["zettel", "note"]},
+        "domains": {
+            "general": ["note", "essay"],
+            "science": ["physics", "biology"],
+        },
+        "universalCategories": [],
+        "folderMap": {},
+        "types": ["essay"],
+        "themes": ["knowledge"],
+        "reservedModifiers": [],
+    }
+    ctx = _floor_context(tmp_path, taxonomy, "science")
+    floor = _build_floor_tags(ctx)
+    assert floor[-1] == "zettel", f"first marker from taxonomy must be used: {floor}"
