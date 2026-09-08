@@ -100,24 +100,56 @@ def semantic_guard(
 
 
 def _find_json_colon(text: str, key: str) -> int:
-    """Find the colon after *key* in *text*.
+    """Find the colon after the **top-level** *key* in *text*.
 
-    Returns the position of the colon, or -1 if the key is not a JSON key
-    in *text* (absent, or embedded inside a string value rather than being
-    a key itself).  Only exact key matches are returned — the character
-    after the closing quote must be whitespace or a colon.
+    Returns the position of the colon, or -1 when *key* is not a key of the
+    root object.  Depth matters, and getting it wrong corrupts the file: this
+    used to take the first textual occurrence of the key at any nesting level,
+    so on a real taxonomy.json "themes" resolved to ``schema.arity.themes`` --
+    the arity pair ``[1, 3]`` -- which sits above the real themes array.
+    Minting a tag appended its name into the schema's arity declaration, and
+    the file still parsed, so nothing downstream noticed until the validator
+    read an arity of ``[1, 3, "some-tag"]``.
+
+    Only the root object's own keys are candidates, and a key inside a string
+    value is never one.
     """
     qkey = json.dumps(key, ensure_ascii=False)
-    pos = 0
-    while True:
-        idx = text.find(qkey, pos)
-        if idx == -1:
-            return -1
-        after = idx + len(qkey)
-        if after < len(text) and text[after] in " \t\n\r:":
-            colon = text.find(":", after)
-            return colon if colon != -1 else -1
-        pos = after
+    depth = 0
+    in_str = False
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if in_str:
+            if c == "\\":
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+                i += 1
+                continue
+            i += 1
+            continue
+        if c == '"':
+            # A key of the root object sits at depth 1 and is followed, after
+            # optional whitespace, by a colon.
+            if depth == 1 and text.startswith(qkey, i):
+                after = i + len(qkey)
+                j = after
+                while j < n and text[j] in " \t\n\r":
+                    j += 1
+                if j < n and text[j] == ":":
+                    return j
+            in_str = True
+            i += 1
+            continue
+        if c in "{[":
+            depth += 1
+        elif c in "}]":
+            depth -= 1
+        i += 1
+    return -1
 
 
 def _find_object_end(text: str, start: int) -> int:
@@ -210,22 +242,28 @@ def _append_to_array(
         new_items = ", ".join(f'"{it}"' for it in items)
         return text[: end] + ", " + new_items + text[end:]
 
-    # Multiline — detect item indentation from the last line before ].
-    pre_close = text[:end]
-    last_item_end = pre_close.rstrip()
-    last_line_start = last_item_end.rfind("\n")
+    # Multiline — match the indentation of the existing items, and insert
+    # directly after the last one.
+    #
+    # Two off-by-ones lived here.  The indent scan began AT the newline, so
+    # the first character it saw was "\n", which is not a space or tab: it
+    # broke immediately and measured an indent of "", putting every appended
+    # entry at column 0.  And the insert was made at `end` -- the closing
+    # bracket -- which is preceded by the whitespace indenting that bracket,
+    # so the comma landed alone on its own line after that whitespace.
+    last_item_end = len(text[:end].rstrip())
+    last_line_start = text.rfind("\n", 0, last_item_end)
     if last_line_start == -1:
         return None
-    last_line = last_item_end[last_line_start:]
     item_indent = ""
-    for ch in last_line:
+    for ch in text[last_line_start + 1:]:
         if ch in " \t":
             item_indent += ch
         else:
             break
 
     new_lines = ",\n".join(f'{item_indent}"{it}"' for it in items)
-    return text[:end] + ",\n" + new_lines + text[end:]
+    return text[:last_item_end] + ",\n" + new_lines + text[last_item_end:]
 
 
 def _set_key_in_object(
@@ -279,25 +317,25 @@ def _set_key_in_object(
         # on the same line and the new entry goes on the next.
         content_raw = text[brace + 1 : end]
         last_content_stripped = content_raw.rstrip()
-        last_line_start = last_content_stripped.rfind("\n")
+        insert_pos = brace + 1 + len(last_content_stripped)
+        # The indent scan began at the newline, which is neither a space nor a
+        # tab, so it measured "" and put new entries at column 0.  Start after
+        # it.
+        last_line_start = text.rfind("\n", 0, insert_pos)
         if last_line_start == -1:
             return None
-        last_line = last_content_stripped[last_line_start:]
         entry_indent = ""
-        for ch in last_line:
+        for ch in text[last_line_start + 1:]:
             if ch in " \t":
                 entry_indent += ch
             else:
                 break
 
-        # Insert right after the last entry content, before the
-        # whitespace that precedes `}`.
-        insert_pos = brace + 1 + len(last_content_stripped)
-        return (
-            text[:insert_pos]
-            + ",\n" + entry_indent + entry
-            + text[insert_pos:]
-        )
+        # One entry per line, matching how the object is already written --
+        # joining them onto a single line reformats a region the caller did
+        # not ask to reformat.
+        block = (",\n").join(f'{entry_indent}"{k}": 1' for k in items)
+        return text[:insert_pos] + ",\n" + block + text[insert_pos:]
 
     # Key absent — create the object inside the root.  The root object
     # is the outermost pair of braces; its `}` is the last `}` in the

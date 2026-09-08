@@ -351,3 +351,139 @@ def test_all_keys_preserved(tmp_path: Path) -> None:
 
     result_keys = set(json.loads(_read(path)).keys())
     assert original_keys == result_keys
+
+
+# ---------------------------------------------------------------------------
+# The shape of the real file: a nested key that shadows a top-level one
+# ---------------------------------------------------------------------------
+
+#: The user's taxonomy declares tag arity under `schema.arity`, so the key
+#: "themes" appears TWICE — first as an arity pair inside schema, and only
+#: later as the tag list itself.  The other fixtures here have no such
+#: shadowing, which is why they could not catch the defect below.
+SHADOWED_KEYS = """\
+{
+  "version": 1,
+  "$comment": "Hand-authored. Do not reformat.",
+
+  "schema": {
+    "order": ["domain", "themes", "entities"],
+    "arity": {
+      "domain": [1, 1],
+      "themes": [
+        1,
+        3
+      ],
+      "entities": [0, 6]
+    }
+  },
+
+  "themes": [
+    "epistemology",
+    "optic"
+  ],
+
+  "types": ["note"],
+
+  "_themeCounts": {
+    "epistemology": 3,
+    "optic": 1
+  }
+}
+"""
+
+
+class TestNestedKeyShadowing:
+    """A top-level key must not be confused with a nested one of the same name.
+
+    The locator took the first textual occurrence of the key at any nesting
+    level.  On the real taxonomy that made "themes" resolve to
+    `schema.arity.themes` — the arity pair [1, 3] — which sits above the tag
+    list.  Minting appended tag names into the schema's arity declaration:
+
+        "themes": [
+          1,
+          3
+        ,
+        "kinematics-of-vision"],
+
+    The file still parsed, so nothing downstream complained until the
+    validator read an arity of [1, 3, "kinematics-of-vision"].
+    """
+
+    @staticmethod
+    def _load(tmp_path: Path) -> ThemeRegistry:
+        path = tmp_path / "taxonomy.json"
+        path.write_text(SHADOWED_KEYS, encoding="utf-8", newline="\n")
+        return ThemeRegistry.load(path)
+
+    def test_arity_declaration_is_untouched(self, tmp_path: Path) -> None:
+        reg = self._load(tmp_path)
+        reg.mint_theme("kinematics-of-vision")
+        assert reg.persist()
+        data = json.loads((tmp_path / "taxonomy.json").read_text(encoding="utf-8"))
+        assert data["schema"]["arity"]["themes"] == [1, 3]
+
+    def test_the_tag_lands_in_the_tag_list(self, tmp_path: Path) -> None:
+        reg = self._load(tmp_path)
+        reg.mint_theme("kinematics-of-vision")
+        assert reg.persist()
+        data = json.loads((tmp_path / "taxonomy.json").read_text(encoding="utf-8"))
+        assert data["themes"] == ["epistemology", "optic", "kinematics-of-vision"]
+
+    def test_appended_items_match_the_existing_indentation(self, tmp_path: Path) -> None:
+        """The indent scan started at the newline and always measured "".
+
+        Entries landed at column 0, and the comma was left alone on its own
+        line, in a file whose whole purpose here is to keep its formatting.
+        """
+        reg = self._load(tmp_path)
+        reg.mint_theme("kinematics-of-vision")
+        assert reg.persist()
+        text = (tmp_path / "taxonomy.json").read_text(encoding="utf-8")
+        assert '    "kinematics-of-vision"\n' in text
+        assert '\n"kinematics-of-vision"' not in text
+        assert "\n    ,\n" not in text and "\n  ,\n" not in text
+
+    def test_counts_entries_match_the_existing_indentation(self, tmp_path: Path) -> None:
+        reg = self._load(tmp_path)
+        reg.mint_theme("kinematics-of-vision")
+        assert reg.persist()
+        text = (tmp_path / "taxonomy.json").read_text(encoding="utf-8")
+        assert '    "kinematics-of-vision": 1' in text
+
+    def test_two_mints_each_get_their_own_line(self, tmp_path: Path) -> None:
+        """Joining several entries onto one line reformats a region unasked."""
+        reg = self._load(tmp_path)
+        reg.mint_theme("kinematics-of-vision")
+        reg.mint_theme("burden-of-proof")
+        assert reg.persist()
+        text = (tmp_path / "taxonomy.json").read_text(encoding="utf-8")
+        assert '    "kinematics-of-vision": 1,\n    "burden-of-proof": 1' in text
+        data = json.loads(text)
+        assert data["schema"]["arity"]["themes"] == [1, 3]
+        assert data["themes"][-2:] == ["kinematics-of-vision", "burden-of-proof"]
+
+    def test_only_the_necessary_lines_change(self, tmp_path: Path) -> None:
+        reg = self._load(tmp_path)
+        reg.mint_theme("kinematics-of-vision")
+        assert reg.persist()
+        after = (tmp_path / "taxonomy.json").read_text(encoding="utf-8")
+        before_lines = SHADOWED_KEYS.split("\n")
+        after_lines = after.split("\n")
+        # Exactly four lines differ, and each one has to: the previous last
+        # entry of `themes` and of `_themeCounts` each gain a trailing comma,
+        # and one new line is added to each.  Everything else -- the inline
+        # arrays, the blank lines, the $comment, the schema block -- is
+        # untouched.  Against the old whole-file reserialisation the same mint
+        # changed 118 lines.
+        changed = [l for l in after_lines if l not in before_lines]
+        assert changed == [
+            '    "optic",',
+            '    "kinematics-of-vision"',
+            '    "optic": 1,',
+            '    "kinematics-of-vision": 1',
+        ], changed
+        # And only the two lines that gained a comma leave the "before" set.
+        untouched = [l for l in before_lines if l not in after_lines]
+        assert untouched == ['    "optic"', '    "optic": 1'], untouched
