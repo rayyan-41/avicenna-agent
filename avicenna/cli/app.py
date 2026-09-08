@@ -10,12 +10,15 @@ import asyncio
 import os
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import typer
 from dotenv import load_dotenv
 
 load_dotenv()
+
+if TYPE_CHECKING:
+    from avicenna.pipeline.preflight import PreflightDeclaration
 
 app = typer.Typer(no_args_is_help=False, add_completion=False)
 
@@ -146,17 +149,22 @@ def note_cmd(
     if concurrency is not None:
         overrides["max_concurrency"] = concurrency
 
-    async def _cli_plan_approval(
-        plan: 'PreflightDeclaration',
-    ) -> bool:
-        concurrency = len(plan.headings)
+    # A decline is not a failure, but execute_run reports both the same way:
+    # it returns None and the runner swallows PipelineAbort into a RunFailed
+    # event that the headless CLI has no subscriber to render.  Without this
+    # flag, answering "n" prints "Done." — the exact opposite of what happened.
+    declined = False
+
+    async def _cli_plan_approval(plan: PreflightDeclaration) -> bool:
+        nonlocal declined
+        parallel = len(plan.headings)
         typer.echo("")
         typer.echo(f"Plan for '{plan.topic}':")
-        typer.echo(f"  Domain:      {plan.domain}")
-        typer.echo(f"  Template:    {plan.template}")
+        typer.echo(f"  Domain:       {plan.domain}")
+        typer.echo(f"  Template:     {plan.template}")
         typer.echo(f"  Target words: {plan.target_words}")
-        typer.echo(f"  Concurrency: {concurrency} sections in parallel")
-        typer.echo(f"  Headings ({len(plan.headings)}):")
+        typer.echo(f"  Concurrency:  {parallel} sections in parallel")
+        typer.echo(f"  Headings ({parallel}):")
         for i, h in enumerate(plan.headings, 1):
             typer.echo(f"    {i}. {h}")
         typer.echo("")
@@ -167,10 +175,9 @@ def note_cmd(
             if response in ("y", "yes"):
                 return True
             if response in ("n", "no"):
+                declined = True
                 return False
             typer.echo("Please enter 'y' or 'n'.")
-
-    from avicenna.pipeline.preflight import PreflightDeclaration  # noqa: F811
 
     asyncio.run(execute_run(
         topic, provider, bound_vault,
@@ -180,6 +187,9 @@ def note_cmd(
         overrides=overrides,
         on_plan=_cli_plan_approval,
     ))
+    if declined:
+        typer.echo("Plan declined — nothing was written.")
+        raise typer.Exit(1)
     typer.echo("Done.")
 
 
