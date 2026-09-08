@@ -981,11 +981,20 @@ class WordCountStage(PipelineStage):
         # Advisory only: report the count and note the distance from target,
         # but a short note is always kept.  Observed output of 1,180 words
         # where a previous run produced 9,040 is acceptable variance.
+        #
+        # wordcount_ok stays True unconditionally — that is the policy, and it
+        # is deliberate.  The verdict is a *measurement*, not a control signal,
+        # and it used to be the constant "pass": a live run reported
+        # verdict=pass at 3,401 words against a 9,000 minimum while separately
+        # logging that the note was below guidance.  A field that says the same
+        # thing whatever happened carries no information, so it now reports
+        # what was actually measured.  Nothing branches on it.
         ctx.wordcount_ok = True
-        await ctx.emit(WordCountChecked, actual=actual, minimum=expected_total, verdict="pass")
-        if actual < expected_total:
-            await ctx.emit(LogMessage, level="info",
-                           text=f"word count {actual} is below guidance {expected_total} (advisory, not a failure)")
+        short = actual < expected_total
+        await ctx.emit(
+            WordCountChecked, actual=actual, minimum=expected_total,
+            verdict="short" if short else "pass",
+        )
 
 
 #: The tagger must mark its answer. Scanning for "a line containing a comma"

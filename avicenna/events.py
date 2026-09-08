@@ -103,7 +103,13 @@ class ToolReturned(Event):
 class WordCountChecked(Event):
     actual: int = 0
     minimum: int = 0
-    verdict: Literal["pass", "fail"] = "pass"
+    #: "short" exists because the two-value vocabulary forced a lie.  A short
+    #: note is deliberately never a failure (WordCountStage is advisory), but
+    #: with only "pass" and "fail" available the stage emitted "pass" for a
+    #: note it had just logged as below guidance — a live run reported
+    #: verdict=pass at 3,401 words against a 9,000 minimum.  "short" reports
+    #: the measurement truthfully while leaving "fail" to mean the run failed.
+    verdict: Literal["pass", "short", "fail"] = "pass"
 
 
 @dataclass(frozen=True)

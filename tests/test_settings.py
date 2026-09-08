@@ -272,8 +272,15 @@ class TestLengthNotEnforced:
         note = _note(vault)
         assert note.is_file()
 
-    async def test_wordcount_stage_emits_report_but_never_fails(self, tmp_path: Path) -> None:
-        """WordCountStage always emits a pass verdict, even when short."""
+    async def test_wordcount_stage_reports_short_but_never_fails(self, tmp_path: Path) -> None:
+        """A short note reports "short" and still completes.
+
+        This test used to assert verdict == "pass" for a note of a dozen words
+        against a 9,000-word target, pinning the constant that made the field
+        meaningless.  The policy it was defending — a short note is never a
+        failure — is unchanged and is asserted below: the run completes and the
+        note is written.  Only the report is now truthful.
+        """
         short_body = "Brief. " * 3
 
         def short_script(system: str, messages: list[Any]) -> Completion:
@@ -302,7 +309,13 @@ class TestLengthNotEnforced:
 
         wc_events = [e for e in events if isinstance(e, WordCountChecked)]
         assert len(wc_events) == 1, "expected exactly one WordCountChecked event"
-        assert wc_events[0].verdict == "pass"
+        assert wc_events[0].verdict == "short"
+        assert wc_events[0].actual < wc_events[0].minimum
+        # The policy: short is advisory.  The run finished and wrote the note.
+        from avicenna.events import RunFailed
+
+        assert not [e for e in events if isinstance(e, RunFailed)]
+        assert _note(vault).is_file()
 
     def test_short_note_does_not_fail_matrix_cell(self, tmp_path: Path) -> None:
         """gen_matrix word count assertion is advisory — never fails a cell.

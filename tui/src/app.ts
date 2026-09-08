@@ -976,10 +976,14 @@ export class App {
         return;
 
       case 'WordCountChecked':
+        // 'short' is advisory: the note is kept and the run continues, so it
+        // reads as a measurement rather than as the failure 'fail' denotes.
         this.write(
-          d.verdict === 'fail'
-            ? `word count ${num('actual')} is below the ${num('minimum')} minimum`
-            : `word count ${num('actual')} — passes`,
+          d.verdict === 'pass'
+            ? `word count ${num('actual')} — passes`
+            : d.verdict === 'short'
+              ? `word count ${num('actual')} of ${num('minimum')} (below guidance, advisory)`
+              : `word count ${num('actual')} is below the ${num('minimum')} minimum`,
         );
         return;
 
