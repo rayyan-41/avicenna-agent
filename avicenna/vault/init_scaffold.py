@@ -16,8 +16,7 @@ long-form, structurally-guaranteed notes.
 3. **Weave** — The weaver assembles chunks into a single note.
 4. **Tag** — The tagger proposes tags; `validate_tags.ps1` checks them against the taxonomy.
 5. **Format** — The formatter applies template structure.
-6. **Link** — `get_related_notes.ps1` finds connections and the linker inserts wikilinks.
-7. **MOC** — `update_moc.ps1` updates the domain's Map of Content.
+6. **MOC** — `update_moc.ps1` updates the domain's Map of Content.
 
 ## Runtime
 

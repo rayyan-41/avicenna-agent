@@ -19,11 +19,14 @@ Avicenna is an academic scribe. A user gives it a raw, half-formed idea — *the
 epistemic gap and the necessity of revelation*, say — and it returns a
 long-form Markdown note in their Obsidian vault: structure declared up front,
 every heading written in a fresh context by a domain-specialist subagent, woven
-into continuous prose, tagged from a closed taxonomy, wikilinked into the notes
-the user already has, and entered into the domain's Map of Content. It is a
-harness for subagents and MCP tools, not a chatbot, and the point of the whole
-program is the *connection*: a brilliant note that links to nothing is a
-failure.
+into continuous prose, tagged from a closed taxonomy, and entered into the
+domain's Map of Content. It is a harness for subagents and MCP tools, not a
+chatbot, and the point of the whole program is the *connection*: a brilliant
+note that is not tagged, not entered into its Map of Content, and not reachable
+from the rest of the vault is a failure. Connection is carried by entity tags
+from a closed taxonomy and the Map of Content — not by wikilinks. Do not
+reintroduce wikilink generation; interconnectivity in this vault is
+entity-driven.
 
 ---
 

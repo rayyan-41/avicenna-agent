@@ -4,9 +4,7 @@ PART A — _canonical_domain_dir must resolve a domain like "reason" to an
 existing "Reason/" directory rather than creating a second one.
 
 PART B — when the tagger fails three times, a minimal valid tag array is
-constructed from the taxonomy instead of shipping tags: []. And when
-get_related_notes yields 0 candidates the linker is skipped rather than
-asked to weave links against nothing (which invented notes that did not exist).
+constructed from the taxonomy instead of shipping tags: [].
 """
 
 from __future__ import annotations
@@ -16,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from avicenna.bus import EventBus, drain
-from avicenna.events import Event, LogMessage, LinkCandidatesFound
+from avicenna.events import Event, LogMessage
 from avicenna.pipeline.run import execute_run
 from avicenna.pipeline.stages import _canonical_domain_dir
 from avicenna.providers.base import Completion
@@ -53,9 +51,6 @@ def _script(system: str, messages: list[Any]) -> Completion:
         return Completion(text=_declaration())
     if "TAGS:" in prompt:
         return Completion(text="Reviewed the note.\nTAGS: philosophy, epistemology, revelation")
-    if "genuinely related" in prompt:
-        note = prompt.split("\n\n", 1)[-1]
-        return Completion(text=note.replace("this section", "this [[section]]", 1))
     if "formatting corrected" in prompt:
         return Completion(text=prompt.split("\n\n", 1)[-1])
     if "Assemble this into one continuous note" in prompt:
@@ -322,9 +317,6 @@ async def test_constrained_retry_injects_taxonomy_options(tmp_path: Path) -> Non
         # Standard stages
         if "pre-flight plan" in prompt or "JSON fence" in prompt:
             return Completion(text=_declaration(domain="philosophy"))
-        if "genuinely related" in prompt:
-            note = prompt.split("\n\n", 1)[-1]
-            return Completion(text=note)
         if "formatting corrected" in prompt:
             return Completion(text=prompt.split("\n\n", 1)[-1])
         if "Assemble this into one continuous note" in prompt:
@@ -356,126 +348,6 @@ async def test_constrained_retry_injects_taxonomy_options(tmp_path: Path) -> Non
     # Note must end up with the successful tagger's tags, not the floor
     body = _note(vault).read_text(encoding="utf-8")
     assert "consciousness" in body.split("---")[1]
-
-
-async def test_linker_skipped_when_zero_candidates(tmp_path: Path) -> None:
-    """0 link candidates → linker skipped, no model call, warning emitted."""
-    from avicenna.tools.base import Tool, ToolResult, ToolSource, ToolAccess
-    from avicenna.tools.contracts import ParsedContract
-
-    agents_called: list[str] = []
-
-    def tracking_script(system: str, messages: list[Any]) -> Completion:
-        prompt = messages[-1].content if messages else ""
-        if "pre-flight plan" in prompt or "JSON fence" in prompt:
-            return Completion(text=_declaration())
-        if "Reply with the tags" in prompt:
-            return Completion(text="Reviewed.\nTAGS: philosophy, epistemology, revelation")
-        if "Assemble this into one continuous note" in prompt:
-            return Completion(text=prompt.split("\n\nTopic:")[0])
-        if "formatting corrected" in prompt:
-            return Completion(text=prompt.split("\n\n", 1)[-1])
-        if "genuinely related" in prompt:
-            agents_called.append("linker")
-            return Completion(text=prompt.split("\n\n", 1)[-1])
-        return Completion(text=BODY.strip())
-
-    class FakeNoCandidatesTool(Tool):
-        name = "get_related_notes"
-        description = "find related notes"
-        parameters = {"type": "object", "properties": {
-            "NotePath": {"type": "string"},
-            "CoreTags": {"type": "string"},
-        }}
-        source = ToolSource.BUILTIN
-        access = ToolAccess.PIPELINE_ONLY
-
-        async def invoke(self, **kwargs: Any) -> ToolResult:
-            return ToolResult(
-                "get_related_notes", True,
-                "CANDIDATES_FOUND: 0",
-                "", 0, 0.0,
-                parsed=ParsedContract("get_related_notes", True, "CANDIDATES_FOUND",
-                                      {"count": "0"}),
-            )
-
-    vault = _scaffold(tmp_path, agents=("tagger", "linker"))
-    vault.tools.register(FakeNoCandidatesTool())
-    events = await _run(vault, script=tracking_script)
-
-    assert "linker" not in agents_called, "linker must not be called with 0 candidates"
-    warnings = [
-        e.text for e in events
-        if isinstance(e, LogMessage) and "0 link candidates" in e.text
-    ]
-    assert warnings, "must emit a warning when skipping the linker"
-
-
-async def test_linker_called_with_candidates(tmp_path: Path) -> None:
-    """When there ARE link candidates, the linker is invoked (regression)."""
-    agents_called: list[str] = []
-
-    def script_with_candidates(system: str, messages: list[Any]) -> Completion:
-        prompt = messages[-1].content if messages else ""
-        if "pre-flight plan" in prompt or "JSON fence" in prompt:
-            return Completion(text=_declaration())
-        if "Reply with the tags" in prompt:
-            return Completion(text="Reviewed.\nTAGS: philosophy, epistemology, revelation")
-        if "Assemble this into one continuous note" in prompt:
-            return Completion(text=prompt.split("\n\nTopic:")[0])
-        if "formatting corrected" in prompt:
-            return Completion(text=prompt.split("\n\n", 1)[-1])
-        if "genuinely related" in prompt:
-            agents_called.append("linker")
-            note = prompt.split("\n\n", 1)[-1]
-            # Link to a note that exists in the vault (created below), so the
-            # wikilink validation does not strip it.
-            return Completion(text=note.replace("this section", "this [[Section]]", 1))
-        return Completion(text=BODY.strip())
-
-    # Scaffold with a fake get_related_notes tool that returns candidates.
-    from avicenna.tools.base import Tool, ToolResult, ToolSource, ToolAccess
-    from avicenna.tools.contracts import ParsedContract
-
-    class FakeRelatedTool(Tool):
-        name = "get_related_notes"
-        description = "find related notes"
-        parameters = {"type": "object", "properties": {
-            "NotePath": {"type": "string"},
-            "CoreTags": {"type": "string"},
-            "SupportingTags": {"type": "string"},
-            "ExcludedMentions": {"type": "string"},
-            "TopN": {"type": "integer"},
-            "MinScore": {"type": "number"},
-        }}
-        source = ToolSource.BUILTIN
-        access = ToolAccess.PIPELINE_ONLY
-
-        async def invoke(self, **kwargs: Any) -> ToolResult:
-            return ToolResult(
-                "get_related_notes", True,
-                "CANDIDATES_FOUND: 3\n"
-                "1. [[Philosophy of Mind]] (score 0.8)\n"
-                "2. [[Ibn Sina]] (score 0.6)\n"
-                "3. [[Epistemology]] (score 0.5)",
-                "", 0, 0.0,
-                parsed=ParsedContract("get_related_notes", True, "CANDIDATES_FOUND",
-                                      {"count": "3"}),
-            )
-
-    vault = _scaffold(tmp_path, agents=("tagger", "linker"))
-    # Pre-create a note the linker can resolve against, so the wikilink
-    # validation does not strip the link.
-    section_note = vault.root / "General" / "Section.md"
-    section_note.parent.mkdir(parents=True, exist_ok=True)
-    section_note.write_text("# Section\n\nRelated note.", encoding="utf-8", newline="\n")
-    vault.tools.register(FakeRelatedTool())
-    events = await _run(vault, script=script_with_candidates)
-
-    assert "linker" in agents_called, "linker must be called when candidates exist"
-    # Find the generated note (not Section.md).
-    body = (vault.root / "General" / "The Epistemic Gap and the Necessity of Revelation.md").read_text(encoding="utf-8")
-    assert "[[" in body, "the linker's wikilinks must reach the note"
 
 
 # =============================================================================

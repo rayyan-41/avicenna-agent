@@ -2,7 +2,7 @@
 
 Embeds title, headings, and lead paragraphs per note.  Long notes are chunked
 on heading boundaries since a section is the natural unit of meaning and the
-unit the linker will later query with.
+unit a retrieval query will later match against.
 
 Keyed by note path (relative to vault root) plus a SHA-256 content hash so
 a note edited in Obsidian invalidates by hash on the next index pass; nothing

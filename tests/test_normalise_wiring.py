@@ -6,8 +6,8 @@ The normaliser (avicenna.pipeline.normalise) is called in two places:
      _write_note_atomically — so every first-run note carries clean
      structure.
   2. _write_back(), after frontmatter reconciliation and before the
-     truncation guard — so every model-produced revision (formatter,
-     linker) is normalised before it reaches the vault.
+     truncation guard — so every model-produced revision (formatter)
+     is normalised before it reaches the vault.
 
 These tests verify that:
 
@@ -89,9 +89,6 @@ def _messy_weaver_script(system: str, messages: list[Any]) -> Completion:
         return Completion(text=_declaration())
     if "TAGS:" in prompt:
         return Completion(text="Reviewed the note.\nTAGS: philosophy, epistemology, revelation")
-    if "genuinely related" in prompt:
-        note = prompt.split("\n\n", 1)[-1]
-        return Completion(text=note)
     if "formatting corrected" in prompt:
         return Completion(text=prompt.split("\n\n", 1)[-1])
     # The weaver: inject rules between every heading.
@@ -116,9 +113,6 @@ def _clean_script(system: str, messages: list[Any]) -> Completion:
         return Completion(text=_declaration())
     if "TAGS:" in prompt:
         return Completion(text="Reviewed the note.\nTAGS: philosophy, epistemology, revelation")
-    if "genuinely related" in prompt:
-        note = prompt.split("\n\n", 1)[-1]
-        return Completion(text=note)
     if "formatting corrected" in prompt:
         return Completion(text=prompt.split("\n\n", 1)[-1])
     if "Assemble this into one continuous note" in prompt:
@@ -291,9 +285,6 @@ async def test_formatter_reintroducing_rules_gets_normalised(tmp_path: Path) -> 
             return Completion(text=_declaration())
         if "TAGS:" in prompt:
             return Completion(text="Reviewed.\nTAGS: philosophy, epistemology, revelation")
-        if "genuinely related" in prompt:
-            note = prompt.split("\n\n", 1)[-1]
-            return Completion(text=note)
         if "Assemble this into one continuous note" in prompt:
             return Completion(text=prompt.split("\n\nTopic:")[0])
         # The formatter: inject rules adjacent to headings.

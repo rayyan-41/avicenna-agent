@@ -9,14 +9,14 @@
 Avicenna is **not a chatbot**. It is a single-purpose instrument for generating
 long-form notes. Give it a topic and it runs a full pipeline: routing,
 pre-flight, parallel section generation, assembly, word count, TOC, tagging,
-formatting, linking and MOC update — all gated by deterministic PowerShell
+formatting and MOC update — all gated by deterministic PowerShell
 contract tokens, never by model prose. The interface narrates every stage as it
 happens: stage markers, per-section progress with word counts and timings, tool
 calls with their results, and a final written-note confirmation.
 
 Domain-specialist subagents do the writing, one per heading in a fresh context.
 MCP tools extend what a section can reach. The finished note is tagged from a
-closed taxonomy and wikilinked into the notes you already have, so it arrives
+closed taxonomy and entered into the domain's Map of Content, so it arrives
 connected rather than orphaned. See [AGENTS.md](AGENTS.md) for the full account.
 
 ## Architecture
@@ -86,7 +86,7 @@ User Topic
     -> Routing Stage -> Pre-flight Stage -> Manifest Stage
     -> Sections Stage (parallel one_shot per heading)
     -> Assembly Stage -> Word Count Stage -> TOC Stage
-    -> Tagging Stage -> Formatter -> Linker -> MOC Stage
+    -> Tagging Stage -> Formatter -> MOC Stage
     -> Note written to vault
 ```
 

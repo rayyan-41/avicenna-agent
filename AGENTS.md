@@ -69,15 +69,13 @@ vault, that has:
 - **Tags from a closed taxonomy.** A `tagger` proposes; `validate_tags` checks
   the proposal against `taxonomy.json` and rejects invention. Tags that do not
   exist in your vocabulary do not enter your vault.
-- **Wikilinks into what you already have.** `get_related_notes` scores existing
-  notes against the new one's tags; a `linker` agent inserts `[[wikilinks]]` at
-  the places where the argument actually touches them.
 - **A place in the graph.** The domain's Map of Content is updated, so the note
   is reachable rather than orphaned.
 
 The deliverable is not the text. **The deliverable is a note that is connected
-to the rest of your thinking.** A brilliant orphan note is a failure of this
-program.
+to the rest of your thinking.** Connection is carried by entity tags from a
+closed taxonomy and the Map of Content — not by wikilinks. A brilliant note
+that is not tagged and not entered into its MOC is a failure of this program.
 
 ### What Avicenna is not
 
@@ -223,7 +221,6 @@ topic
   |- TOC ............. generate_toc.ps1
   |- Tagging ......... @tagger proposes -> validate_tags gates -> up to 3 attempts
   |- Formatting ...... @formatter applies the declared template
-  |- Linking ......... get_related_notes scores -> @linker inserts wikilinks
   \- MOC ............. update_moc.ps1 puts the note in the domain's index
 ```
 
@@ -294,10 +291,10 @@ here. This is the agent that does the actual writing.
 | `weaver` | assembly | Sees all chunks; writes transitions, frontmatter, separators |
 | `tagger` | tagging | Proposes a tag line for validation against the taxonomy |
 | `formatter` | tagging | Applies the declared template's structure |
-| `linker` | linking | Inserts `[[wikilinks]]` where the argument touches other notes |
 
-Every one of them is optional. A vault without a `weaver` gets raw chunk text; a
-vault without a `linker` gets an unlinked note. The stage says so in an event.
+Every one of them is optional. A vault without a `weaver` gets raw chunk text;
+a vault without a `formatter` gets unformatted prose. The stage says so in an
+event.
 
 **`audit`** — read-only inspectors. They report; they do not mutate the note.
 

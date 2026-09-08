@@ -2,7 +2,7 @@
 
 PART A — a topic containing a colon produces invalid YAML frontmatter.
 PART B — a fenced duplicate frontmatter block survives unwrapping.
-PART C — the linker turns section headings into wikilinks.
+PART C — wikilink resolution strips links to non-existent notes.
 """
 
 from __future__ import annotations
@@ -364,7 +364,7 @@ class TestWikilinkResolution:
         events: list[Event] = []
         async for ev in drain(queue):
             events.append(ev)
-        warnings = [e for e in events if isinstance(e, LogMessage) and "invented" in e.text]
+        warnings = [e for e in events if isinstance(e, LogMessage) and "model produced" in e.text]
         assert len(warnings) >= 1
         assert "1" in warnings[0].text  # 1 dropped
         info = [e for e in events if isinstance(e, LogMessage) and "resolved" in e.text]
