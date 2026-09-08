@@ -26,11 +26,20 @@ from typing import Any
 
 WORDS_PER_HEADING_DEFAULT: int = 1000
 
-# Per-call API timeout for the provider client (seconds).  600s (10 min)
-# bounds a hung call without cutting short a legitimate slow generation.
-# Configurable via AVICENNA_PROVIDER_TIMEOUT env var or the
-# "provider_timeout" key in vault config.
-PROVIDER_TIMEOUT_DEFAULT: float = 600.0
+# Per-call API timeout for the provider client (seconds).  300s matches the
+# Mistral SDK's own implicit default (chat.py:379-383) so the explicit value
+# introduces no regression.  Configurable via AVICENNA_PROVIDER_TIMEOUT env
+# var or the "provider_timeout" key in vault config.
+PROVIDER_TIMEOUT_DEFAULT: float = 300.0
+
+# Total wall-time budget for one logical complete() call across all retry
+# attempts, backoff included (seconds).  900s (15 min) allows 2–3 full-length
+# retries at the 300s per-call default, which is enough for transient failures
+# to clear.  Without this budget, repeated bounded-but-slow retries multiply
+# across calls — the mechanism that actually produced the 8,703-second run.
+# Configurable via AVICENNA_PROVIDER_BUDGET env var or "provider_budget" in
+# vault config.
+PROVIDER_BUDGET_DEFAULT: float = 900.0
 
 
 # ---------------------------------------------------------------------------

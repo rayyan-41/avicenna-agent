@@ -1,6 +1,6 @@
 """Mistral backend implementing the stateless LLMProvider ABC.
 
-Verified against mistralai v2.8.0 (installed 2026-08-02).
+Verified against mistralai 2.9.1 (installed 2026-09-08).
 Import path: from mistralai.client import Mistral.
 
 When a KeyPool is provided, each complete() call selects a key via round-robin.
@@ -17,6 +17,14 @@ been tried does it sleep and advance to the next attempt.  This prevents a
 burst of rate-limited rotations from exhausting the retry budget in
 milliseconds — exactly what happens when a 40-heading parallel fan-out hits
 the provider simultaneously.
+
+A total-elapsed budget (_budget_s) bounds wall time across all retry attempts
+for one logical complete() call.  Without it, repeated bounded-but-slow retries
+multiply across calls — each retry restarts the per-call clock.  The SDK's
+implicit 300s default (chat.py:379-383) bounds a single attempt but not the
+total; the budget does.  When the budget is exhausted, the last mapped error is
+raised rather than starting another attempt.  The per-call timeout_ms is shrunk
+to fit the remaining budget so the last attempt cannot overrun it.
 """
 
 from __future__ import annotations
@@ -82,7 +90,8 @@ class MistralProvider(LLMProvider):
         self,
         api_key: str,
         model: str = "mistral-large-latest",
-        timeout: float = 600.0,
+        timeout: float = 300.0,
+        budget: float | None = 900.0,
         max_retries: int = _MAX_RETRIES,
         pool: KeyPool | None = None,
     ) -> None:
@@ -91,11 +100,13 @@ class MistralProvider(LLMProvider):
         self._pool = pool
         # timeout_ms is the SDK's parameter name (int, milliseconds). We store
         # it as such so every client construction and per-call site can pass it
-        # directly without repeated conversion.  Default is 600s (10 min).
-        # The budget's job is to bound a hung call, not a slow one: a section
-        # generating ~1,000 words must never hit it, while a call that has
-        # genuinely hung should be killed in minutes rather than hours.
+        # directly without repeated conversion.  Default 300s matches the SDK's
+        # own implicit default (chat.py:379-383).
         self._timeout_ms: int = int(timeout * 1000)
+        # Total wall-time budget for one complete() call across all retries.
+        # Bounding per-call alone is not enough: each retry restarts the clock.
+        # See the module docstring for the full reasoning.
+        self._budget_s: float | None = budget
         # Lazily-built clients, keyed by the API key string. When pooled, each
         # key gets its own client so we never re-create one in a hot loop.
         self._clients: dict[str, MistralClient] = {
@@ -140,11 +151,30 @@ class MistralProvider(LLMProvider):
             self._pool.live_count * self._max_retries if self._pool
             else self._max_retries
         )
+        budget_start = time.monotonic()
 
         while attempt < self._max_retries:
             if rotation >= max_rotations:
                 break
             rotation += 1
+
+            # Budget check: if the total elapsed time across all retries
+            # exceeds the budget, stop.  Each retry restarts the per-call
+            # clock, so per-call timeouts alone do not bound the total.
+            if self._budget_s is not None:
+                elapsed = time.monotonic() - budget_start
+                if elapsed >= self._budget_s:
+                    raise last_exc or TransientError("provider budget exhausted")
+
+            # Shrink the per-call timeout to fit the remaining budget so the
+            # last attempt cannot overrun it.
+            call_timeout_ms = self._timeout_ms
+            if self._budget_s is not None:
+                remaining_s = self._budget_s - (time.monotonic() - budget_start)
+                remaining_ms = int(remaining_s * 1000)
+                if remaining_ms <= 0:
+                    raise last_exc or TransientError("provider budget exhausted")
+                call_timeout_ms = min(call_timeout_ms, remaining_ms)
 
             client = self._get_client(current_key)
             try:
@@ -154,7 +184,7 @@ class MistralProvider(LLMProvider):
                     tools=wire_tools,
                     temperature=temperature,
                     max_tokens=max_tokens,
-                    timeout_ms=self._timeout_ms,
+                    timeout_ms=call_timeout_ms,
                 )
             except Exception as exc:
                 mapped = self._map_error(exc)

@@ -802,15 +802,17 @@ class AssemblyStage(PipelineStage):
                 "frontmatter block at the top unchanged — the pipeline owns it and "
                 "will fill in the tags. Return only the note.\n"
             )
-            # The deadline lives in the provider client (timeout_ms on the
-            # Mistral SDK), not in an asyncio.wait_for wrapper here.  An
-            # earlier version wrapped this call in wait_for, but the default
-            # was None — so in practice no deadline existed at any layer, and
-            # a hung call blocked for 2.4 hours.  Even when wait_for is
-            # configured, it abandons the coroutine but cannot abort the
-            # underlying HTTP request; the socket stays open until the OS
-            # gives up.  A provider-level timeout kills the request itself
-            # through httpx, which is why it belongs there.  A timeout
+            # The deadline lives in the provider client, not here.  The
+            # Mistral SDK applies a 300s per-call default (chat.py:379-383),
+            # and this codebase now makes that explicit and configurable
+            # (provider_timeout) while also bounding total wall time across
+            # retries (provider_budget).  An earlier version wrapped this
+            # call in asyncio.wait_for with a default of None — so no
+            # harness-side deadline was ever applied either.  Neither a
+            # per-call timeout alone nor a harness deadline alone bounds a
+            # retrying call: each retry restarts the per-call clock and
+            # the harness has no visibility into retry state.  The provider
+            # owns both, so the deadline belongs there.  A provider timeout
             # surfaces as a TransientError, which this except block catches
             # and degrades from just like any other weaver failure.
             try:

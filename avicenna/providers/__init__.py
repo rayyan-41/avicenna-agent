@@ -51,18 +51,27 @@ if TYPE_CHECKING:  # names resolved at runtime by __getattr__, below
 def _mistral_factory(**kwargs: Any) -> LLMProvider:
     """Construct a MistralProvider, importing the vendor SDK on first use.
 
-    When the caller does not pass an explicit ``timeout``, the factory resolves
-    one through the layered settings (env → default).  This is the single
-    wiring point so every path through ``get_provider("mistral")`` gets a
-    deadline without each caller having to know about it.
+    When the caller does not pass explicit ``timeout`` or ``budget``, the
+    factory resolves them through the layered settings (env → default).  This
+    is the single wiring point so every path through ``get_provider("mistral")``
+    gets deadlines without each caller having to know about them.
     """
     from avicenna.providers.mistral import MistralProvider
-    from avicenna.settings import PROVIDER_TIMEOUT_DEFAULT, resolve_timeout
+    from avicenna.settings import (
+        PROVIDER_BUDGET_DEFAULT,
+        PROVIDER_TIMEOUT_DEFAULT,
+        resolve_timeout,
+    )
 
     if "timeout" not in kwargs:
         kwargs["timeout"] = resolve_timeout(
             "provider_timeout", PROVIDER_TIMEOUT_DEFAULT,
             env_name="AVICENNA_PROVIDER_TIMEOUT",
+        )
+    if "budget" not in kwargs:
+        kwargs["budget"] = resolve_timeout(
+            "provider_budget", PROVIDER_BUDGET_DEFAULT,
+            env_name="AVICENNA_PROVIDER_BUDGET",
         )
     return MistralProvider(**kwargs)
 
