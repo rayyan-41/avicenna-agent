@@ -119,6 +119,14 @@ a lint for `print(` to stdout outside `avicenna/cli/`, and a check that every
 module declares `from __future__ import annotations`. Read the workflow before
 claiming a change is green.
 
+**Run the gates the way CI runs them.** `pytest` and `python -m pytest` are not
+the same command: the latter puts the working directory on `sys.path`, and three
+test modules import from `scripts/`, which is not a package and is not installed.
+CI runs the bare form. That difference hid a build where *both* jobs aborted
+during collection — and because every other gate runs after the test step,
+nothing else ran either, for a dozen commits. A green local run is not evidence
+until it was produced by CI's own invocation.
+
 The print lint matches **one line at a time**, so a `print(` whose
 `file=sys.stderr` sits on a later line fails it even though it writes to stderr.
 Use `warn()` from `avicenna/config.py` rather than hand-rolling one — this has

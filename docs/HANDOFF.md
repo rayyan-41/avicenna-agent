@@ -5,9 +5,11 @@ for doctrine and [CLAUDE.md](../CLAUDE.md) for the operational layer first —
 this file only carries what neither of those can know: what is half-done, what
 was learned the hard way, and what comes next.
 
-**Rewritten 2026-09-08.** The previous version listed three tasks. All three
-have now landed, and its diagnosis of the first was wrong — see the correction
-below, which matters more than anything else in this file.
+**Rewritten 2026-09-08 (second pass).** The three-task list landed, a live run
+against the real vault exposed four further defects, and all four are now fixed.
+The most important thing in this file is no longer the diagnosis correction
+below — it is that **CI had been running zero tests for at least a dozen
+commits.** See "The build was lying".
 
 ---
 
@@ -40,9 +42,9 @@ registration remain since they are still valid vault infrastructure.
 | | |
 | --- | --- |
 | Repo | `master`, pushed, working tree clean |
-| Tests | 605 passing (was 519 at the start of the session) |
-| Gates | `mypy --strict` on providers+pipeline+bridge clean (24 files); parity OK (21 events); `check_maps` OK; both PowerShell lints clean; bridge smoke test OK; frontend typecheck/build/29 tests clean |
-| Vault | separate git repo on `E:`, at `2016b7e` — unchanged this session |
+| Tests | 714 passing, 1 skipped (was 519 at the start of the session) |
+| Gates | All green **on CI**, which is new — see "The build was lying". `mypy --strict` on providers+pipeline+bridge (26 files); parity OK (23 events); `check_maps` OK; both PowerShell lints; bridge smoke test; frontend typecheck/build/29 tests |
+| Vault | separate git repo on `E:`, with **three uncommitted changes** from the live run: one new note under `History/`, plus a modified `.agents/taxonomy.json` and History MOC. Left alone deliberately; reverting is the user's call |
 | Config | `~/.avicenna/` holds `api_keys_pool`, `user_config.json`, `mcp_config.json`, `index/` |
 
 ---
@@ -171,22 +173,127 @@ produces; it has **not** been tested against the application, and
 
 ---
 
+## The build was lying
+
+CI had been failing on `master` for at least a dozen commits, and **both jobs
+aborted at their Tests step** — so every gate that runs after it had never
+executed at all: strict mypy, the bridge blocking-call lint, vendor neutrality
+and containment, the reference-vault name check, the future-annotations check,
+the stray-print lint, protocol parity, the bridge smoke test, and the frontend's
+unstyled check. The build read as merely red rather than as vacuous, because the
+failure was at collection.
+
+Two causes, both invocation differences hidden by a developer machine:
+
+- **Python.** Three test modules import from `scripts/`, which is not a package
+  and is not installed by `pip install -e`. `python -m pytest` puts the working
+  directory on `sys.path` and collected fine; the bare `pytest` CI runs does
+  not, so collection was interrupted with three `ModuleNotFoundError`s and no
+  test ran. Fixed with `pythonpath = ["."]` in the pytest ini.
+- **Frontend.** `node --test "test/*.test.mjs"` passes the glob to node quoted,
+  and node only expands globs from v21. `package.json` declares `>=18` and CI
+  pins 20; this dev machine runs 24. Fixed with argument-free `node --test`.
+
+Then the first run that actually *reached* the type check failed on undeclared
+`types-PyYAML`, now in the dev extra.
+
+**The lesson generalises:** run gates the way CI runs them, not the way that is
+convenient locally. `python -m pytest` and `pytest` are not the same command.
+
+---
+
 ## What is actually left
 
-Nothing from the original three-task list. The remaining work is what was always
-deliberately deferred:
-
 - **Wire the embedding index.** `avicenna/vault/index.py` still has no callers,
-  and `semantic_guard` at `avicenna/vault/registry.py:61` still returns `None`
-  for every proposal. That is the seam, and it is the thing that would stop
-  synonym proliferation in the taxonomy.
+  and `semantic_guard` in `avicenna/vault/registry.py` still returns `None` for
+  every proposal. That is the seam, and it is the thing that would stop synonym
+  proliferation in the taxonomy.
 - **Vault sovereignty / emergent taxonomy.** Designed but unbuilt —
   `docs/superpowers/specs/2026-09-07-vault-sovereignty-and-emergent-taxonomy-design.md`.
 - **The terminal interface.** Designed but unbuilt —
   `docs/superpowers/specs/2026-09-07-terminal-interface-design.md`. Read the
   frontend-skeleton section of CLAUDE.md before touching `tui/`.
-- **Prove the timeout work on a real run.** Everything about the 8,703-second
-  run is still inference. One long run with logs kept would settle it.
+- **A live run against the new weaver.** The transition weaver has never been
+  exercised against a real API — every test injects a `FakeProvider`, and that
+  seam is exactly where its last defect hid.
+- **Bridge plan approval.** The bridge auto-approves every plan. A real
+  approve/decline needs a response path in the wire protocol, which is a
+  protocol change rather than a pipeline one. `PlanApprovalRequested` already
+  carries everything the frontend would need.
+- **The tagger files people as themes.** The live run tagged a person as a
+  *theme* rather than an *entity*, and coined `optic` as a singular of "optics".
+  Since connection in this vault is carried by entity tags, that is a miss in
+  the thing the project exists to do. Prompt quality, not code.
+
+---
+
+## What the live run exposed, and how each was fixed
+
+The first end-to-end run against the real vault took 204.8s against a previous
+8,703s, which settled the timeout question. It also produced four defects, plus
+a fifth found while verifying the fix for the first.
+
+1. **The weaver destroyed 72% of the note.** It received the whole assembled
+   note and returned a replacement; a 9,000-word note came back at ~2,500, with
+   paragraphs about subjects the note was not about. Nothing caught it because
+   `AssemblyStage` writes through `_write_note_atomically`, which has no
+   truncation guard. Replaced by `TransitionStage` — see below.
+2. **`WordCountChecked` reported `verdict=pass`** at 3,401 words against a 9,000
+   minimum, one line after logging that the note was short. The field was the
+   constant `"pass"` because the only alternative was `"fail"`, and a short note
+   is deliberately not a failure. Added `"short"`; the advisory policy is
+   unchanged and nothing branches on the verdict.
+3. **The normaliser added a blank line to every correctly-spaced heading**, and
+   was not idempotent: a heading with no blank after it gained one on the first
+   pass and a second on the next. 658 tests passed over it, because nothing
+   asserted on heading spacing at all.
+4. **Numbering made every section a sibling of its own sub-headings.**
+   `## Section` is promoted to `### N. Section`, which is the level the section
+   agents' sub-headings already use. Sub-headings now demote with their parent,
+   guarded so the pass stays idempotent.
+5. **Four characters in a heading silently broke its TOC anchor** — `]` closes
+   the wikilink early, `|` is the alias separator, `#` the heading separator,
+   `^` a block reference. The heading is sanitised, not merely the anchor,
+   because the two must stay byte-identical. Emphasis, colons, parentheses and
+   ampersands are legal in a link target and are deliberately left alone, which
+   also settles the open question about a live note's
+   `[[#4. The *Book of Optics* ...]]` anchor: it was always fine.
+
+---
+
+## The weaver is now transition-only
+
+The note body never round-trips through a model. Sections are written once, by
+their section subagent; after that only the pipeline edits the note.
+
+`TransitionStage` runs between assembly and word count. The model sees a
+*skeleton* — the topic, every heading, and the first and last sentence of each
+paragraph — which is enough to know what each section is about and where it
+begins and ends, and not enough to regurgitate the note. It returns one numbered
+single-line transition per section. Python splices one after each heading,
+section 1 included, where it orients the reader from the topic into the first
+section. The write goes through `_write_back`, whose truncation guard is exactly
+the protection whose absence let the 72% loss through.
+
+The guard is **lenient about length and stylistic variation** — a 4-to-80-word
+band only, because models vary and that is not a defect — and **strict about
+topical relation**, which is what actually failed: a transition must share
+significant terms with the heading it precedes, the heading before it, or the
+topic. It must also be structurally inert. A failing transition is dropped
+alone; its siblings still land, and the run never aborts.
+
+**The defect that nearly shipped, and the lesson in it.** The provider was
+constructed as `get_provider(name, keys=pool, ...)`. Providers take `api_key`
+plus `pool`, and `get_provider` is `(name, **kwargs)` — so mypy checked nothing,
+the `TypeError` landed in the stage's own broad `except`, and every real run
+would have reported "transition provider unavailable" and skipped the weaver
+silently. The suite stayed green because every test injects a `FakeProvider`
+through the `weaver_provider` seam and never builds a real one.
+
+> A test seam that bypasses construction leaves construction untested, and a
+> broad `except` around it turns the resulting failure into a shrug. Where a
+> stage degrades gracefully, something must still exercise the path it degrades
+> *from*.
 
 ---
 
@@ -300,6 +407,9 @@ provider-scoped: quarantine on 401/403, rotate rather than sleep on 429.
   headings. Still outstanding.
 - Decide whether to keep the `_themeCounts` / `_typeCounts` keys a subagent
   added to `taxonomy.json` against instruction.
+- **Decide what to do with the live run's output in the vault**: one new note
+  under `History/`, plus a modified `.agents/taxonomy.json` and History MOC, all
+  uncommitted. Nothing in this session has touched them.
 - Optionally add `paintings_source` to `excludeFromDerivation`.
 - Optionally drop the `- - -` separator from the weaver template at
   `.agents/agents/weaver.md:121` in the vault. Less urgent now that the
