@@ -651,6 +651,10 @@ class PreflightStage(PipelineStage):
             '  "slug": "string"\n'
             "}\n"
             "```\n"
+            "Headings may optionally carry a form marker: "
+            "[Table] for a comparative table, [Mermaid Diagram] for a "
+            "Mermaid diagram.  Example: "
+            '"[Table] Comparative Matrix of Theological Positions".\n'
         )
         from avicenna.session import one_shot
         raw = await one_shot(
@@ -670,6 +674,7 @@ class PreflightStage(PipelineStage):
         ctx.slug = decl.slug
         ctx.template = decl.template
         ctx.headings = list(decl.headings)
+        ctx.section_forms = list(decl.forms)
         ctx.target_words = decl.target_words
         await ctx.emit(PreflightDeclared,
             topic=decl.topic, domain=decl.domain, template=decl.template,
@@ -698,6 +703,7 @@ class ResumeStage(PipelineStage):
             return
         ctx.slug = manifest.slug
         ctx.headings = list(manifest.headings)
+        ctx.section_forms = list(manifest.forms)
         ctx.template = manifest.template or ctx.template
         ctx.target_words = manifest.target_words or ctx.target_words
         if manifest.domain:
@@ -762,6 +768,7 @@ class ManifestStage(PipelineStage):
             domain=ctx.domain or "",
             template=ctx.template or "",
             target_words=ctx.target_words,
+            forms=list(ctx.section_forms) if ctx.section_forms else None,
         ))
 
         await ctx.emit(ManifestWritten, slug=ctx.slug, expected_count=expected)
@@ -916,10 +923,15 @@ class WordCountStage(PipelineStage):
             overrides=ctx.spec.overrides,
             vault_config=vault_cfg,
         )
-        # The per-heading target is multiplied by the number of headings to
-        # produce an expected whole-note total.  This is guidance only — never
-        # a gate.
-        expected_total = target * max(1, len(ctx.headings))
+        # The per-heading target is multiplied by the number of prose headings
+        # to produce an expected whole-note total.  Formed sections (tables,
+        # Mermaid diagrams) do not write to a prose word target and must not
+        # count against it — including them produces a permanently misleading
+        # "below guidance" warning.
+        prose_headings = max(1, len(ctx.headings) - sum(
+            1 for f in ctx.section_forms if f is not None
+        ))
+        expected_total = target * prose_headings
 
         if ctx.spec.vault.tools.has("validate_wordcount"):
             result = await invoke_tool(ctx, "validate_wordcount",

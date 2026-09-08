@@ -41,6 +41,7 @@ class Manifest:
         domain: str = "",
         template: str = "",
         target_words: int = 0,
+        forms: list[str | None] | None = None,
     ) -> None:
         self.slug = slug
         self.headings = headings
@@ -49,6 +50,10 @@ class Manifest:
         self.domain = domain
         self.template = template
         self.target_words = target_words
+        #: Per-heading form overrides, parallel to ``headings``.
+        #: ``None`` entries mean prose.  Absent on manifests written before
+        #: forms were introduced.
+        self.forms: list[str | None] = forms if forms is not None else [None] * len(headings)
 
 
 def manifest_path(tmp_dir: Path, slug: str) -> Path:
@@ -68,6 +73,7 @@ def write_manifest(tmp_dir: Path, manifest: Manifest) -> Path:
         "domain": manifest.domain,
         "template": manifest.template,
         "headings": manifest.headings,
+        "forms": manifest.forms,
         "expected_count": manifest.expected_count,
         "target_words": manifest.target_words,
     }
@@ -103,6 +109,13 @@ def load_manifest(tmp_dir: Path, slug: str) -> Manifest | None:
     if not isinstance(data, dict):
         return None
     headings = [str(h) for h in data.get("headings", [])]
+    raw_forms = data.get("forms")
+    forms: list[str | None] | None
+    if isinstance(raw_forms, list) and len(raw_forms) == len(headings):
+        forms = [str(f) if f is not None else None for f in raw_forms]
+    else:
+        # Old manifest without forms, or length mismatch — default to prose.
+        forms = None
     return Manifest(
         slug=str(data.get("slug", slug)),
         headings=headings,
@@ -111,6 +124,7 @@ def load_manifest(tmp_dir: Path, slug: str) -> Manifest | None:
         domain=str(data.get("domain", "")),
         template=str(data.get("template", "")),
         target_words=int(data.get("target_words", 0)),
+        forms=forms,
     )
 
 

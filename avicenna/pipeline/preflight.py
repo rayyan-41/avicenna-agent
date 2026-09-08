@@ -18,9 +18,39 @@ _FIELD = r"^\s*(?:[-*]\s*)?(?:\*\*)?{key}(?:\*\*)?\s*[:=]\s*(?P<v>[^\n]+)$"
 _SLUG_STRIP = re.compile(r"[^a-z0-9]+")
 _RESERVED = {"CON", "PRN", "AUX", "NUL"}
 
+# --- section forms -----------------------------------------------------------
+# A closed vocabulary of bracketed form markers that a heading may carry.
+# Case-insensitive lookup; values are the canonical form identifiers consumed
+# by sections.py.  An unrecognised bracketed prefix is left in the title — a
+# model inventing [Chart] must not produce a heading with a missing word.
+_FORM_MARKER = re.compile(r"^\[([^\]]+)\]\s+")
+
+_SECTION_FORMS: dict[str, str] = {
+    "table": "table",
+    "mermaid": "mermaid",
+    "mermaid diagram": "mermaid",
+}
+
 
 class PreflightError(ValueError):
     pass
+
+
+def parse_form(heading: str) -> tuple[str, str | None]:
+    """Extract a recognised form marker from *heading*, if present.
+
+    Returns ``(clean_title, form_or_none)``.  An unrecognised bracketed
+    prefix is left as part of the title — a model inventing ``[Chart]``
+    must not produce a heading with a missing word.
+    """
+    m = _FORM_MARKER.match(heading)
+    if not m:
+        return heading, None
+    candidate = m.group(1).strip().lower()
+    form = _SECTION_FORMS.get(candidate)
+    if form is None:
+        return heading, None
+    return heading[m.end():].strip(), form
 
 
 @dataclass(frozen=True)
@@ -29,6 +59,7 @@ class PreflightDeclaration:
     domain: str
     template: str
     headings: tuple[str, ...]
+    forms: tuple[str | None, ...]
     target_words: int
     slug: str
 
@@ -98,11 +129,22 @@ def parse_preflight(
     headings_raw = data.get("headings") or []
     if not isinstance(headings_raw, list):
         raise PreflightError("headings must be a list")
-    headings = [str(h).strip() for h in headings_raw if str(h).strip()]
-    if not headings:
+    # Strip and reject empties, then extract form markers.  The marker is
+    # metadata that travels alongside the heading; the title reaching the
+    # note must be clean (no leaked `[Table]` prefix in a TOC).
+    cleaned: list[str] = []
+    forms: list[str | None] = []
+    for raw in headings_raw:
+        h = str(raw).strip()
+        if not h:
+            continue
+        title, form = parse_form(h)
+        cleaned.append(title)
+        forms.append(form)
+    if not cleaned:
         raise PreflightError("pre-flight declared zero headings")
-    if len(headings) > 40:
-        raise PreflightError(f"pre-flight declared {len(headings)} headings, refusing")
+    if len(cleaned) > 40:
+        raise PreflightError(f"pre-flight declared {len(cleaned)} headings, refusing")
     template = str(data.get("template") or "general").strip().lower()
     try:
         target = int(str(data.get("target_words") or 0).replace(",", "").split()[0])
@@ -115,7 +157,7 @@ def parse_preflight(
     return (
         PreflightDeclaration(
             topic=topic, domain=domain, template=template,
-            headings=tuple(headings), target_words=target,
+            headings=tuple(cleaned), forms=tuple(forms), target_words=target,
             slug=unique_slug(base, tmp_dir),
         ),
         used_json,

@@ -39,6 +39,41 @@ Rules:
   appropriate to the {domain} domain.
 Output the section body as Markdown, nothing else."""
 
+# --- form-specific prompt suffixes -------------------------------------------
+# A form overrides the prose default for exactly one section.  The suffix is
+# appended to the standard prompt so the section agent sees the heading, the
+# outline, and the form constraint in one message.  The form does NOT let the
+# model choose its own control flow — it selects a fragment from this closed
+# mapping.
+
+_TABLE_SUFFIX = """
+This section MUST be written as a Markdown comparative table.
+Use pipe-delimited columns with a separator row.  The table must be complete,
+renderable, and cover the heading's topic.  Do not add prose before or after
+the table — the output IS the table.
+"""
+
+_MERMAID_SUFFIX = """
+This section MUST be a single Mermaid diagram and nothing else.
+Acceptable diagram types: flowchart TD, flowchart LR, graph TD, graph LR,
+sequenceDiagram, classDiagram, stateDiagram-v2, erDiagram, gantt, pie,
+mindmap.
+The output must be exactly one fenced block:
+
+```mermaid
+...diagram here...
+```
+
+Nothing may appear outside the fence.  The diagram must parse as valid
+Mermaid syntax — every node, edge and label must be well-formed.  A diagram
+that fails to render is a visible defect in the user's vault.
+"""
+
+_FORM_SUFFIXES: dict[str, str] = {
+    "table": _TABLE_SUFFIX,
+    "mermaid": _MERMAID_SUFFIX,
+}
+
 
 def _count_words(text: str) -> int:
     return len(text.split())
@@ -57,7 +92,9 @@ def _write_chunk(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
-def _build_task(ctx: RunContext, index: int, heading: str) -> Callable[[], Awaitable[int]]:
+def _build_task(
+    ctx: RunContext, index: int, heading: str, form: str | None,
+) -> Callable[[], Awaitable[int]]:
     spec = ctx.spec
     assert ctx.agent is not None and ctx.domain is not None
     # Bound outside the closure so the narrowing survives into `task()`; the
@@ -81,6 +118,10 @@ def _build_task(ctx: RunContext, index: int, heading: str) -> Callable[[], Await
         words=wph,
         domain=ctx.domain,
     )
+    if form is not None:
+        suffix = _FORM_SUFFIXES.get(form)
+        if suffix is not None:
+            prompt = prompt.rstrip() + "\n" + suffix
 
     async def task() -> int:
         for attempt in (1, 2):
@@ -125,6 +166,10 @@ def _build_task(ctx: RunContext, index: int, heading: str) -> Callable[[], Await
 
 
 async def generate_sections(ctx: RunContext, indices: list[int]) -> None:
-    tasks = [_build_task(ctx, i, ctx.headings[i - 1]) for i in indices]
+    tasks = [
+        _build_task(ctx, i, ctx.headings[i - 1],
+                     ctx.section_forms[i - 1] if i - 1 < len(ctx.section_forms) else None)
+        for i in indices
+    ]
     results = await gather_sections(tasks, concurrency=ctx.spec.concurrency)
     ctx.total_words += sum(r for r in results if isinstance(r, int))

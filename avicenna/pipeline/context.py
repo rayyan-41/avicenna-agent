@@ -56,6 +56,9 @@ class RunContext:
     template: str | None = None
     slug: str | None = None
     headings: list[str] = field(default_factory=list)
+    #: Per-heading form overrides (parallel to headings).  ``None`` means
+    #: prose; recognised values are ``"table"`` and ``"mermaid"``.
+    section_forms: list[str | None] = field(default_factory=list)
     target_words: int = 0
     chunk_paths: dict[int, Path] = field(default_factory=dict)
     failed_sections: list[int] = field(default_factory=list)
