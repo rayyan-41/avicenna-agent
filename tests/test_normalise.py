@@ -316,3 +316,43 @@ class TestEdgeCases:
         assert isinstance(result, NormaliseResult)
         assert result.rules_removed >= 1
         assert isinstance(result.text, str)
+
+
+class TestHeadingSpacing:
+    """Spacing around headings — the pass that was neither correct nor stable.
+
+    The normaliser guaranteed a blank line after every heading by appending one
+    unconditionally, then flushed the blank line the source already had, so a
+    correctly-spaced heading came back with two.  Nothing caught it: 658 tests
+    passed over the defect because none of them looked at heading spacing.
+    """
+
+    def test_existing_blank_after_heading_is_not_doubled(self) -> None:
+        assert normalise_markdown("### 1. Foo\n\nbody").text == "### 1. Foo\n\nbody"
+
+    def test_missing_blank_after_heading_is_inserted(self) -> None:
+        assert normalise_markdown("### 1. Foo\nbody").text == "### 1. Foo\n\nbody"
+
+    def test_blank_run_after_heading_collapses_to_one(self) -> None:
+        assert normalise_markdown("## A\n\n\n\nx").text == "## A\n\nx"
+
+    def test_spacing_is_idempotent(self) -> None:
+        """Two passes must equal one.
+
+        The interesting case is a heading with no blank after it: the first
+        pass inserted one, and the second inserted another beside it.  A note
+        is normalised in more than one stage, so a pass that drifts on every
+        application drifts in production.
+        """
+        for text in (
+            "### 1. Foo\nbody",
+            "### 1. Foo\n\nbody",
+            "## A\n\nx\n\n## B\n\ny",
+            "# T\n\n## A\nalpha\n\n## B\n\nbeta\n",
+        ):
+            once = normalise_markdown(text).text
+            assert normalise_markdown(once).text == once, text
+
+    def test_multi_section_note_keeps_single_blank_lines(self) -> None:
+        text = "# Title\n\n## A\n\nalpha\n\n## B\n\nbeta\n"
+        assert "\n\n\n" not in normalise_markdown(text).text

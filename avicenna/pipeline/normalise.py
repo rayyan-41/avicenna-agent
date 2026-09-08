@@ -183,8 +183,18 @@ def normalise_markdown(text: str) -> NormaliseResult:
                 # Rule(s) between content → keep as one rule.
                 flush_rules()
         # Ensure blank line after heading before content.
+        #
+        # Clearing pending_blank matters: when the source ALREADY had a blank
+        # line after the heading, that blank is sitting in pending_blank while
+        # out[-1] is the heading itself.  Without the reset the ensured blank
+        # and the pending one were both emitted, so every correctly-spaced
+        # heading gained a second blank line on each pass -- and a heading with
+        # no blank after it gained one on the first pass and a second on the
+        # next, which is why this function was not idempotent.  The blank we
+        # write here IS the pending one; it must not be written twice.
         if last_non_blank_was_heading and out and out[-1].strip():
             out.append("")
+            pending_blank = False
         flush_blank()
         out.append(stripped)
         last_non_blank_was_heading = False
