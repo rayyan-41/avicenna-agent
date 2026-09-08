@@ -629,3 +629,65 @@ class TestSubHeadingDemotion:
         assert anchors
         for anchor in anchors:
             assert anchor in headings, (anchor, headings)
+
+
+class TestLinkSafeHeadings:
+    """A TOC anchor that cannot resolve is the whole project's failure in small.
+
+    Obsidian parses `[[#Heading]]` positionally, so four characters in a
+    heading silently break the anchor pointing at it while the line still looks
+    like a working link.  The heading is sanitised rather than only the anchor,
+    because the two have to stay byte-identical to resolve.
+    """
+
+    @staticmethod
+    def _note(*headings: str) -> str:
+        """Build a note from *headings* plus a plain trailing section.
+
+        generate_toc emits nothing below two sections, so a one-section fixture
+        would assert against a TOC that was never generated.
+        """
+        body = "\n\n".join(f"## {h}\n\nbody." for h in (*headings, "Closing"))
+        return f"# T\n\n{body}\n"
+
+    @staticmethod
+    def _anchors_resolve(text: str) -> bool:
+        heads = {ln.lstrip("#").strip() for ln in text.split("\n") if ln.startswith("###")}
+        anchors = re.findall(r"\[\[#([^\]|]+)", text)
+        assert anchors, "no anchors generated"
+        return all(a in heads for a in anchors)
+
+    def test_bracket_no_longer_closes_the_link_early(self) -> None:
+        out = apply_structure(self._note("Optics [Kitab al-Manazir]")).text
+        assert "### 1. Optics Kitab al-Manazir" in out
+        assert self._anchors_resolve(out)
+
+    def test_pipe_is_not_read_as_an_alias_separator(self) -> None:
+        out = apply_structure(self._note("Cause | Effect")).text
+        assert "### 1. Cause - Effect" in out
+        assert self._anchors_resolve(out)
+
+    def test_hash_is_not_read_as_a_heading_separator(self) -> None:
+        out = apply_structure(self._note("The #1 Problem")).text
+        assert self._anchors_resolve(out)
+
+    def test_legal_characters_are_left_alone(self) -> None:
+        """Emphasis, colons, parentheses and ampersands resolve as written.
+
+        These are ordinary characters inside a link target.  Stripping them
+        would damage headings for no reason.
+        """
+        heading = "Vision: *Kitab al-Manazir* (al-Haytham) & Proof"
+        out = apply_structure(self._note(heading)).text
+        assert f"### 1. {heading}" in out
+        assert self._anchors_resolve(out)
+
+    def test_sanitisation_is_idempotent(self) -> None:
+        note = self._note("Optics [Kitab al-Manazir]", "Cause | Effect", "The #1 Problem")
+        once = apply_structure(note).text
+        assert apply_structure(once).text == once
+
+    def test_heading_of_only_hostile_characters_keeps_its_text(self) -> None:
+        """A broken anchor beats a heading with no words in it."""
+        out = apply_structure(self._note("###")).text
+        assert "1. " in out

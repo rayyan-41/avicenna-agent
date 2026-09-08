@@ -16,7 +16,10 @@ Hard constraints:
 - The frontmatter block (leading ``---`` / ``---``) is untouched.
 - Fenced code blocks (````` and ``~~~``) are passed through byte-identically.
 - The transformation is idempotent: ``f(f(x)) == f(x)``.
-- Every link in the generated TOC resolves to a heading that exists in the note.
+- Every link in the generated TOC resolves to a heading that exists in the
+  note.  Section headings are stripped of the characters that cannot survive
+  inside a wikilink target (see ``_link_safe``), so the anchor and the
+  heading stay byte-identical.
 """
 
 from __future__ import annotations
@@ -98,6 +101,41 @@ def _strip_numbered_prefix(text: str) -> str:
     ``Already Clean`` -> ``Already Clean``.
     """
     return _NUMBERED_PREFIX.sub("", text)
+
+
+# Characters that cannot survive inside a wikilink target.  Obsidian parses
+# `[[#Heading]]` positionally, so four characters in a heading break the anchor
+# that points at it -- and the breakage is silent, because the line still looks
+# like a link:
+#
+#   `]`  closes the link early:  [[#Optics [Kitab al-Manazir]]]  ->  target
+#        "...Manazir" with a stray `]` left in the text.
+#   `|`  is the alias separator: [[#Cause | Effect]]  ->  target "...Cause ",
+#        display " Effect".  The target does not exist.
+#   `#`  is the heading separator: [[#The #1 Problem]] -> a subheading path.
+#   `^`  introduces a block reference.
+#
+# Emphasis, colons, parentheses and ampersands are NOT in this set: they are
+# ordinary characters inside a link target and resolve as written.
+_LINK_HOSTILE = re.compile(r"[\[\]#^]")
+
+
+def _link_safe(text: str) -> str:
+    """Make heading text safe to appear inside a ``[[#anchor]]``.
+
+    Applied to the heading itself, not only to the anchor, because the two must
+    stay byte-identical for the link to resolve.  Sanitising one side alone
+    would trade a broken link for a link pointing at a heading that no longer
+    matches it.
+
+    Idempotent: the output contains none of the characters it removes.
+    """
+    cleaned = _LINK_HOSTILE.sub("", text).replace("|", "-")
+    # Collapse the whitespace that removal can leave behind.
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+    # A heading consisting entirely of hostile characters keeps its original
+    # text: a broken anchor is better than a heading with no words in it.
+    return cleaned or text
 
 
 def _parse_headings(body_lines: list[str]) -> list[tuple[int, str, str]]:
@@ -320,7 +358,7 @@ def apply_structure(text: str) -> StructureResult:
 
             if hi in section_indices:
                 section_counter += 1
-                clean = _strip_numbered_prefix(txt)
+                clean = _link_safe(_strip_numbered_prefix(txt))
                 new_heading = f"### {section_counter}. {clean}"
                 if new_heading != stripped:
                     headings_numbered += 1
