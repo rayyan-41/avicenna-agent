@@ -16,6 +16,7 @@
 <!-- map:files:start -->
 | File | Loc | Role |
 | --- | --- | --- |
+| `test_approval.py` | 281 | Tests for the approval-gate concurrency feature: the default (on_plan=None) preserves existing behaviour; an approving callback sets concurrency to the heading count; a declining callback aborts the run cleanly; the configured path still clamps to MAX_CONCURRENCY_MAX; the approved path may exceed the configured ceiling; the plan passed to the callback carries the real headings. |
 | `test_check_maps.py` | 392 | Tests for `scripts/check_maps.py` — MAP.md inventory parity gate. Covers: untracked file detection before staging, staged-file parity, extra-row rejection for untracked files, ignored-file exclusion, (untracked) annotation on missing-row findings, the marker-alone-on-its-line rule, and placeholder rejection (rows containing the placeholder token must fail). All tests use tmp_path with a real `git init`. |
 | `test_concurrency.py` | 55 | Proves `gather_sections` caps peak concurrency at the requested limit, isolates failures so one exception does not cancel siblings, and cleans up on cancellation. |
 | `test_domain_derivation.py` | 359 | Domain derivation from the vault's folder tree: domains derive from root subdirectories excluding dotted dirs and `_tmp`; on-disk casing is canonical; categories derive from domain subfolders; routing validates against the derived set; no directory creation outside init; drift between folders and taxonomy.json is reported; `_derive_domains` unit tests. |

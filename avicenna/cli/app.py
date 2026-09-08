@@ -146,12 +146,39 @@ def note_cmd(
     if concurrency is not None:
         overrides["max_concurrency"] = concurrency
 
+    async def _cli_plan_approval(
+        plan: 'PreflightDeclaration',
+    ) -> bool:
+        concurrency = len(plan.headings)
+        typer.echo("")
+        typer.echo(f"Plan for '{plan.topic}':")
+        typer.echo(f"  Domain:      {plan.domain}")
+        typer.echo(f"  Template:    {plan.template}")
+        typer.echo(f"  Target words: {plan.target_words}")
+        typer.echo(f"  Concurrency: {concurrency} sections in parallel")
+        typer.echo(f"  Headings ({len(plan.headings)}):")
+        for i, h in enumerate(plan.headings, 1):
+            typer.echo(f"    {i}. {h}")
+        typer.echo("")
+        while True:
+            response = await asyncio.to_thread(
+                lambda: input("Approve this plan? [y/n] ").strip().lower()
+            )
+            if response in ("y", "yes"):
+                return True
+            if response in ("n", "no"):
+                return False
+            typer.echo("Please enter 'y' or 'n'.")
+
+    from avicenna.pipeline.preflight import PreflightDeclaration  # noqa: F811
+
     asyncio.run(execute_run(
         topic, provider, bound_vault,
         dry_run=dry_run,
         resume=resume, fresh=not resume,
         domain_override=hint_domain,
         overrides=overrides,
+        on_plan=_cli_plan_approval,
     ))
     typer.echo("Done.")
 

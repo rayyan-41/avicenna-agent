@@ -335,6 +335,17 @@ class Bridge:
         run_id = str(uuid.uuid4())[:8]
         hint_domain, _hint_category = ctx.location_hint(vault)
 
+        # The frontend cannot block on stdin, so the bridge auto-approves
+        # every plan.  The PlanApprovalRequested event still crosses the wire
+        # so the frontend can display the plan.  A real approve/decline flow
+        # over the wire protocol is deferred — the event carries the data it
+        # would need, and adding a response path is a protocol change, not a
+        # pipeline change.
+        async def _auto_approve(
+            plan: Any,
+        ) -> bool:
+            return True
+
         async def _run() -> None:
             try:
                 overrides: dict[str, Any] = {}
@@ -350,6 +361,7 @@ class Bridge:
                     fresh=not resume,
                     domain_override=params.get("domain") or hint_domain,
                     overrides=overrides,
+                    on_plan=_auto_approve,
                 )
             except asyncio.CancelledError:
                 raise

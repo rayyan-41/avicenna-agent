@@ -171,5 +171,9 @@ async def generate_sections(ctx: RunContext, indices: list[int]) -> None:
                      ctx.section_forms[i - 1] if i - 1 < len(ctx.section_forms) else None)
         for i in indices
     ]
-    results = await gather_sections(tasks, concurrency=ctx.spec.concurrency)
+    # The approved path (human gate) sets concurrency to the heading count,
+    # bypassing the configured ceiling.  The configured path (no gate) uses
+    # spec.concurrency, which is clamped by resolve_concurrency.
+    effective = ctx.approved_concurrency if ctx.approved_concurrency is not None else ctx.spec.concurrency
+    results = await gather_sections(tasks, concurrency=effective)
     ctx.total_words += sum(r for r in results if isinstance(r, int))

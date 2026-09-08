@@ -1024,6 +1024,16 @@ export class App {
         this.write(`note written to ${str('path')} (${num('words')} words)`);
         return;
 
+      case 'PlanApprovalRequested': {
+        const headings = list('headings');
+        this.write(
+          `plan: ${str('domain')}/${str('template')} — ${headings.length} headings, ` +
+            `target ${num('target_words')} words, concurrency ${num('concurrency')}`,
+        );
+        headings.forEach((heading, index) => this.write(`  ${index + 1}. ${heading}`));
+        return;
+      }
+
       case 'RunComplete':
         this.busy = null;
         this.write(

@@ -55,6 +55,7 @@ export type EventName =
   | 'ThemeMinted'
   | 'MocUpdated'
   | 'NoteWritten'
+  | 'PlanApprovalRequested'
   | 'RunFailed'
   | 'RunComplete'
   | 'LogMessage';

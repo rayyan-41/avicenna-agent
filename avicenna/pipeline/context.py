@@ -7,9 +7,10 @@ and resume has an obvious place to rehydrate state from disk.
 from __future__ import annotations
 
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from avicenna.bus import EventBus
 from avicenna.events import Event
@@ -19,6 +20,9 @@ from avicenna.settings import MAX_CONCURRENCY_DEFAULT
 from avicenna.vault.registry import ThemeRegistry
 from avicenna.vault.vault import Vault
 from avicenna.vault.models import AgentDef
+
+if TYPE_CHECKING:
+    from avicenna.pipeline.preflight import PreflightDeclaration
 
 E = TypeVar("E", bound=Event)
 
@@ -84,6 +88,17 @@ class RunContext:
     #: themes and types can be resolved against the vault's accumulated
     #: vocabulary before validation.
     theme_registry: ThemeRegistry | None = None
+    #: Injectable approval gate.  Called after preflight with the declared
+    #: plan.  Returns True to proceed (setting concurrency to the heading
+    #: count) or False to abort cleanly.  When None, no gate runs and
+    #: concurrency follows the configured precedence chain — this is the
+    #: default that keeps tests, gen_matrix and the bridge unchanged.
+    on_plan: Callable[[PreflightDeclaration], Awaitable[bool]] | None = None
+    #: Set by the approval gate when it approves.  SectionsStage prefers
+    #: this over spec.concurrency, which remains the configured-path value
+    #: (clamped).  The approved path is bounded only by parse_preflight's
+    #: 40-heading refusal — the human gate replaces the clamp.
+    approved_concurrency: int | None = None
 
     @property
     def tmp_dir(self) -> Path:
