@@ -44,6 +44,7 @@ from avicenna.providers.registry import (
 )
 
 if TYPE_CHECKING:  # names resolved at runtime by __getattr__, below
+    from avicenna.providers.gemini import GeminiProvider
     from avicenna.providers.google_embedding import GoogleEmbeddingProvider
     from avicenna.providers.mistral import MistralProvider
 
@@ -76,6 +77,35 @@ def _mistral_factory(**kwargs: Any) -> LLMProvider:
     return MistralProvider(**kwargs)
 
 
+def _gemini_factory(**kwargs: Any) -> LLMProvider:
+    """Construct a GeminiProvider, importing the module on first use.
+
+    When the caller does not pass explicit ``timeout`` or ``budget``, the
+    factory resolves them through the layered settings (env → default).
+    Gemini-specific env vars (AVICENNA_GEMINI_PROVIDER_TIMEOUT,
+    AVICENNA_GEMINI_PROVIDER_BUDGET) take precedence, falling back to the
+    shared defaults.
+    """
+    from avicenna.providers.gemini import GeminiProvider
+    from avicenna.settings import (
+        PROVIDER_BUDGET_DEFAULT,
+        PROVIDER_TIMEOUT_DEFAULT,
+        resolve_timeout,
+    )
+
+    if "timeout" not in kwargs:
+        kwargs["timeout"] = resolve_timeout(
+            "gemini_provider_timeout", PROVIDER_TIMEOUT_DEFAULT,
+            env_name="AVICENNA_GEMINI_PROVIDER_TIMEOUT",
+        )
+    if "budget" not in kwargs:
+        kwargs["budget"] = resolve_timeout(
+            "gemini_provider_budget", PROVIDER_BUDGET_DEFAULT,
+            env_name="AVICENNA_GEMINI_PROVIDER_BUDGET",
+        )
+    return GeminiProvider(**kwargs)
+
+
 def _google_embedding_factory(**kwargs: Any) -> EmbeddingProvider:
     """Construct a GoogleEmbeddingProvider (no SDK, but defer module import)."""
     from avicenna.providers.google_embedding import GoogleEmbeddingProvider
@@ -83,9 +113,10 @@ def _google_embedding_factory(**kwargs: Any) -> EmbeddingProvider:
     return GoogleEmbeddingProvider(**kwargs)
 
 
-# Register known providers. The mistral entry goes in behind a factory so
-# registration itself does not drag in `mistralai`.
+# Register known providers.  Each goes in behind a factory so registration
+# itself does not pull in the module (or any network library).
 _register("mistral", _mistral_factory)
+_register("gemini", _gemini_factory)
 _register("fake", FakeProvider)
 
 # Register known embedding providers.
@@ -96,6 +127,7 @@ _register_embedding("fake", lambda **kw: FakeEmbeddingProvider(**kw))
 # because importing these modules pulls in a vendor SDK (or in the case of
 # GoogleEmbeddingProvider, keeps the import lightweight).
 _LAZY_ATTRS: dict[str, str] = {
+    "GeminiProvider": "avicenna.providers.gemini",
     "MistralProvider": "avicenna.providers.mistral",
     "GoogleEmbeddingProvider": "avicenna.providers.google_embedding",
 }
@@ -120,6 +152,6 @@ __all__ = [
     "LLMProvider", "EmbedTask", "EmbeddingProvider",
     "ProviderError", "AuthError", "RateLimitError", "TransientError",
     "BadRequestError", "ContextOverflowError",
-    "MistralProvider", "FakeProvider", "FakeEmbeddingProvider",
+    "GeminiProvider", "MistralProvider", "FakeProvider", "FakeEmbeddingProvider",
     "GoogleEmbeddingProvider", "get_provider", "get_embedding_provider",
 ]
