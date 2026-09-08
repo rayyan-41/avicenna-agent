@@ -5,9 +5,9 @@ for doctrine and [CLAUDE.md](../CLAUDE.md) for the operational layer first —
 this file only carries what neither of those can know: what is half-done, what
 was learned the hard way, and what comes next.
 
-**Rewritten 2026-09-08.** The previous version listed three tasks. Two have
-landed, the third is half landed, and its diagnosis of the first was wrong —
-see the correction below, which matters more than anything else in this file.
+**Rewritten 2026-09-08.** The previous version listed three tasks. All three
+have now landed, and its diagnosis of the first was wrong — see the correction
+below, which matters more than anything else in this file.
 
 ---
 
@@ -39,9 +39,9 @@ registration remain since they are still valid vault infrastructure.
 
 | | |
 | --- | --- |
-| Repo | `3ce9524` on `master`, **not yet pushed** (10 ahead of `origin/master`), working tree clean |
-| Tests | 550 passing (was 519) |
-| Gates | `mypy --strict` on providers+pipeline+bridge clean; parity OK (22 events); `check_maps` OK; both PowerShell lints clean; bridge smoke test OK; frontend typecheck/build/29 tests clean |
+| Repo | `master`, pushed, working tree clean |
+| Tests | 605 passing (was 519 at the start of the session) |
+| Gates | `mypy --strict` on providers+pipeline+bridge clean (24 files); parity OK (21 events); `check_maps` OK; both PowerShell lints clean; bridge smoke test OK; frontend typecheck/build/29 tests clean |
 | Vault | separate git repo on `E:`, at `2016b7e` — unchanged this session |
 | Config | `~/.avicenna/` holds `api_keys_pool`, `user_config.json`, `mcp_config.json`, `index/` |
 
@@ -61,8 +61,8 @@ entire time. **No single call ever hung for 8,703 seconds.**
 What was unbounded was the *total*. `complete()` retries up to `_MAX_RETRIES`
 times and **every retry restarts the per-call clock**, so one logical
 completion could burn `4 x 300s` plus backoff with nothing watching the sum. A
-run makes one such call per section plus three whole-note round-trips, and
-section concurrency has now gone from 3 to 6.
+run makes one such call per section plus the whole-note round-trips that
+follow, and section concurrency has now gone from 3 to 6.
 
 Bounded-but-slow attempts multiplying across a run is the best available
 explanation for 8,703 seconds. **It is inferred from the code path, not
@@ -130,9 +130,9 @@ byte-identical, and a wrong body feeds the truncation guard, where the failure
 mode is a legitimate revision silently rejected.
 
 `MarkdownNormalised` carries a `stage` field because it fires from more than one
-place. Parity is at 22.
+place.
 
-### 3. Concurrency — DONE. The rest of task 3 — NOT DONE
+### 3. Concurrency — DONE
 
 Section concurrency was hardcoded to `3` in five places. There is now one
 `MAX_CONCURRENCY_DEFAULT = 6` in `avicenna/settings.py`, resolved through
@@ -141,34 +141,52 @@ Section concurrency was hardcoded to `3` in five places. There is now one
 concurrent section is a live call against a rate-limited provider and an
 unbounded value turns a config typo into a 429 storm.
 
+### 4. Structural fidelity — DONE
+
+The benchmark note (7,882 words, 12 numbered `###` headings, a TOC callout whose
+anchors match exactly, 11 tags including 4 entities, **0 external wikilinks**)
+was the target. All three parts landed:
+
+- `avicenna/pipeline/structure.py` — pure Python, imports no LLM client.
+  Numbered `###` headings, TOC callout generation, restated headings stripped,
+  stray `#` demoted. Idempotent.
+- `FormatterStage` no longer delegates to a model; it calls `apply_structure`
+  and still writes through `_write_back`, so the frontmatter guarantee,
+  normalisation and truncation guard all still apply.
+- `TocStage` is gone. It ran five stages *before* numbering and emitted
+  `[[#Foo-1]]` for duplicate headings — an anchor present nowhere in the
+  document — then had its work replaced by `FormatterStage` in the same run.
+- `[Table]` / `[Mermaid Diagram]` section forms are parsed in `preflight.py`
+  and change the section prompt in `sections.py`. The form is metadata: it
+  travels in a parallel `forms` tuple, so the heading text stays clean and the
+  ~15 existing readers of `.headings` did not have to change. Formed sections
+  are excluded from the prose word-count total.
+
+The TOC anchor invariant is a property test worth keeping: **every `[[#...]]`
+target in the TOC must resolve to a heading actually present in the note.** It
+is asserted on both code paths. The anchor format was implemented from
+Obsidian's documented heading-link rules and matches what its autocomplete
+produces; it has **not** been tested against the application, and
+`generate_toc` is the single place to change if it proves wrong.
+
 ---
 
-## The one open task
+## What is actually left
 
-**Deterministic assembly, structural fidelity.** The target is the note the user
-pointed at as the fidelity benchmark, written by the original Gemini CLI
-version. Measured: 7,882 words, 12 numbered `###` headings, a TOC callout whose
-anchors match exactly, 2 horizontal rules, 13 blockquotes, 11 tags including 4
-entities, and **0 external wikilinks**.
+Nothing from the original three-task list. The remaining work is what was always
+deliberately deferred:
 
-That last number is the important one. **Interconnectivity in this vault is
-entity-driven through tags, not wikilink-driven.** Do not chase link counts.
-
-Work in scope:
-
-- Make assembly deterministic. The run still does **two** whole-note model
-  round-trips — weaver and formatter — which are the slowest and buggiest
-  part of it. A comparable project the user showed does assembly in pure
-  Python; its assembler imports no LLM client at all.
-- Numbered `###` headings; a Python-generated TOC callout with exactly-matching
-  anchors; strip repeated headings; demote stray top-level headings.
-- Restore the `[Table]` / `[Mermaid Diagram]` section forms in preflight — the
-  benchmark's plan declared them (`#6. [Table] Comparative Matrix...`,
-  `#9. [Mermaid Diagram] The Architecture of Revelation...`).
-
-Note the interaction with what just landed: removing model round-trips removes
-`_write_back` call sites, and `_write_back` is now also a normalisation point.
-Do not drop the normalisation when you drop the round-trip.
+- **Wire the embedding index.** `avicenna/vault/index.py` still has no callers,
+  and `semantic_guard` at `avicenna/vault/registry.py:61` still returns `None`
+  for every proposal. That is the seam, and it is the thing that would stop
+  synonym proliferation in the taxonomy.
+- **Vault sovereignty / emergent taxonomy.** Designed but unbuilt —
+  `docs/superpowers/specs/2026-09-07-vault-sovereignty-and-emergent-taxonomy-design.md`.
+- **The terminal interface.** Designed but unbuilt —
+  `docs/superpowers/specs/2026-09-07-terminal-interface-design.md`. Read the
+  frontend-skeleton section of CLAUDE.md before touching `tui/`.
+- **Prove the timeout work on a real run.** Everything about the 8,703-second
+  run is still inference. One long run with logs kept would settle it.
 
 ---
 
@@ -280,7 +298,6 @@ provider-scoped: quarantine on 401/403, rotate rather than sleep on 429.
 - **Rotate all four API keys** — a subagent printed them in plaintext — and
   re-scope them in `~/.avicenna/api_keys_pool` under `[mistral]` and `[google]`
   headings. Still outstanding.
-- **`master` is 10 commits ahead of `origin/master` and has not been pushed.**
 - Decide whether to keep the `_themeCounts` / `_typeCounts` keys a subagent
   added to `taxonomy.json` against instruction.
 - Optionally add `paintings_source` to `excludeFromDerivation`.

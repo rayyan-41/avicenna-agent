@@ -65,7 +65,6 @@ export const STAGES = [
   'sections',
   'assembly',
   'wordcount',
-  'toc',
   'tagging',
   'moc',
   'write',

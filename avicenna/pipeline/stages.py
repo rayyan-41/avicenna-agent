@@ -1582,8 +1582,10 @@ def build_stages() -> list[PipelineStage]:
         # after numbering, so every anchor resolves.  A TOC generated before
         # numbering (the old TocStage position) produced invented suffixes for
         # duplicate headings — anchors that existed nowhere in the document.
-        # The "toc" id is preserved in the Stage literal and STAGES array for
-        # backwards compatibility with run logs.
+        # The "toc" Stage literal went with it.  Nothing emitted it once the
+        # stage was gone, and it was safe to drop because a stage's persisted
+        # identity is its `id` (a plain str), not the `name` literal — resume
+        # records no stage names at all, so no old run could depend on it.
         TaggingStage(),
         TagsWrittenStage(),
         FormatterStage(),

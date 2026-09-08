@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 Stage = Literal[
     "preflight", "manifest", "sections", "assembly",
-    "wordcount", "toc", "tagging", "moc", "write",
+    "wordcount", "tagging", "moc", "write",
 ]
 
 
