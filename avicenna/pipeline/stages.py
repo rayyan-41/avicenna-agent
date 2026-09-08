@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 import re
 from pathlib import Path
@@ -21,7 +20,7 @@ from avicenna.pipeline.preflight import PreflightError, parse_preflight
 from avicenna.pipeline.stage import PipelineAbort, PipelineStage
 from avicenna.pipeline.sections import generate_sections
 from avicenna.pipeline.toolcall import invoke_tool
-from avicenna.settings import load_vault_config, resolve_timeout, resolve_words_per_heading
+from avicenna.settings import load_vault_config, resolve_words_per_heading
 from avicenna.tools.base import ToolResult
 from avicenna.vault.routing import classify_domain, route_request, validate_domain
 from avicenna.vault.registry import ThemeRegistry, _normalize as _normalize_tag
@@ -129,11 +128,6 @@ def _write_note_atomically(dest: Path, text: str) -> None:
 # the tagger's tags lived in ctx.tags and never reached the file, and the
 # weaver was asked to emit a literal `tags: [PLACEHOLDER]` that nothing ever
 # substituted — so every note shipped orphaned and unsearchable.
-
-#: Legacy weaver timeout.  Now configurable through settings; the default is
-#: no limit — the harness must not impose deadlines on work that legitimately
-#: takes time.  Kept here for documentation and as a reference value.
-WEAVER_TIMEOUT_S: float | None = None
 
 _FRONTMATTER = re.compile(r"\A---\r?\n(?P<body>.*?)\r?\n---\r?\n?", re.DOTALL)
 _TAGS_LINE = re.compile(r"^tags\s*:.*$", re.MULTILINE)
@@ -838,27 +832,23 @@ class AssemblyStage(PipelineStage):
                 "frontmatter block at the top unchanged — the pipeline owns it and "
                 "will fill in the tags. Return only the note.\n"
             )
-            vault_cfg = load_vault_config(Path(ctx.spec.vault.root))
-            weaver_timeout = resolve_timeout(
-                "weaver_timeout", WEAVER_TIMEOUT_S,
-                env_name="AVICENNA_WEAVER_TIMEOUT",
-                overrides=ctx.spec.overrides,
-                vault_config=vault_cfg,
-            )
+            # The deadline lives in the provider client, not here.  The
+            # Mistral SDK applies a 300s per-call default (chat.py:379-383),
+            # and this codebase now makes that explicit and configurable
+            # (provider_timeout) while also bounding total wall time across
+            # retries (provider_budget).  An earlier version wrapped this
+            # call in asyncio.wait_for with a default of None — so no
+            # harness-side deadline was ever applied either.  Neither a
+            # per-call timeout alone nor a harness deadline alone bounds a
+            # retrying call: each retry restarts the per-call clock and
+            # the harness has no visibility into retry state.  The provider
+            # owns both, so the deadline belongs there.  A provider timeout
+            # surfaces as a TransientError, which this except block catches
+            # and degrades from just like any other weaver failure.
             try:
-                coro = delegate(ctx, "weaver", note_text + "\n\n" + weaver_prompt)
-                woven = await (
-                    asyncio.wait_for(coro, timeout=weaver_timeout)
-                    if weaver_timeout is not None else coro
-                )
+                woven = await delegate(ctx, "weaver", note_text + "\n\n" + weaver_prompt)
                 if woven and woven.strip():
                     note_text = woven
-            except asyncio.TimeoutError:
-                await ctx.emit(
-                    LogMessage, level="warning",
-                    text=(f"weaver timed out after {weaver_timeout:.0f}s on "
-                          f"{len(note_text.split())} words; using the unwoven assembly"),
-                )
             except Exception as exc:  # noqa: BLE001 - fall back to raw chunks
                 detail = str(exc).strip() or type(exc).__name__
                 await ctx.emit(LogMessage, level="warning",

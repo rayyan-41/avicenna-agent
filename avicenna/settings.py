@@ -1,4 +1,4 @@
-"""Minimal settings resolver for the three T36 settings.
+"""Minimal settings resolver for the four T36 settings.
 
 Precedence chain (highest wins):
   1. CLI flag  (overrides dict)
@@ -7,7 +7,7 @@ Precedence chain (highest wins):
   4. Built-in default
 
 This is the slice of the layered-configuration design that words_per_heading,
-provider_timeout and max_concurrency need.  The full design (REGISTRY, Layer
+provider_timeout, provider_budget and max_concurrency need.  The full design (REGISTRY, Layer
 enum, config show/get/set) is on the unexecuted plan and should not be built
 here.
 """
@@ -35,6 +35,23 @@ WORDS_PER_HEADING_DEFAULT: int = 1000
 MAX_CONCURRENCY_DEFAULT: int = 6
 MAX_CONCURRENCY_MIN: int = 1
 MAX_CONCURRENCY_MAX: int = 16
+
+# Per-call API timeout for the provider client (seconds).  300s matches the
+# Mistral SDK's own implicit default (chat.py:379-383) so the explicit value
+# introduces no regression.  Configurable via AVICENNA_PROVIDER_TIMEOUT env
+# var or the "provider_timeout" key in vault config.
+PROVIDER_TIMEOUT_DEFAULT: float = 300.0
+
+# Total wall-time budget for one logical complete() call across all retry
+# attempts, backoff included (seconds).  900s (15 min) allows 2-3 full-length
+# retries at the 300s per-call default, which is enough for transient failures
+# to clear.  Without it nothing bounds the total: each retry restarts the
+# per-call clock, so bounded-but-slow attempts multiply across a run.  That is
+# the best available explanation for the 8,703-second run — inferred from the
+# code path, not measured, because the logs from that run were not kept.
+# Configurable via AVICENNA_PROVIDER_BUDGET env var or "provider_budget" in
+# vault config.
+PROVIDER_BUDGET_DEFAULT: float = 900.0
 
 
 # ---------------------------------------------------------------------------

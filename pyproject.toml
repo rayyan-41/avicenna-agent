@@ -19,6 +19,12 @@ dependencies = [
     # install silently fell back to storing the API key in plain JSON while
     # the README promised the OS keyring.
     "keyring>=24.0",
+    # Imported directly by avicenna/providers/mistral.py to identify timeout
+    # exceptions in the error mapper.  Available transitively through
+    # mistralai, but an undeclared transitive import is a latent breakage: if
+    # mistralai ever changes transport, the import fails at module load and
+    # the entire provider stops loading.
+    "httpx>=0.28.1",
 ]
 
 [project.optional-dependencies]

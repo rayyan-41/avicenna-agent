@@ -386,3 +386,306 @@ async def test_redact_applied_at_provider_level(
 
     assert result.text == "ok"
     assert "ABCDEFGHJKLMNPQRSTUVWXYza12345678" not in caplog.text
+
+
+# ------------------------------------------------------------------
+# Per-call API timeouts
+# ------------------------------------------------------------------
+
+import time as _time
+
+import httpx
+
+from avicenna.providers.errors import TransientError
+
+
+def test_timeout_reaches_sdk_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The configured timeout must be passed as timeout_ms to the SDK constructor.
+
+    Both the eager client (built in __init__) and the lazy client (built by
+    _get_client) must receive it — pooled builds construct one client per key.
+    """
+    from avicenna.providers.mistral import MistralProvider
+
+    captured_kwargs: list[dict[str, object]] = []
+    original_init = MistralProvider.__init__
+
+    # Intercept MistralClient() construction to capture its kwargs.
+    captured_constructors: list[dict[str, object]] = []
+
+    def tracking_mistral_factory(**kwargs: object) -> object:
+        captured_constructors.append(kwargs)
+        # Return a minimal mock that won't be used for actual calls.
+        return type("FakeMistral", (), {})()
+
+    monkeypatch.setattr(
+        "avicenna.providers.mistral.MistralClient", tracking_mistral_factory
+    )
+
+    provider = MistralProvider(api_key="k1", timeout=120.0)
+
+    # __init__ builds one client eagerly for the default key.
+    assert len(captured_constructors) == 1
+    assert captured_constructors[0]["timeout_ms"] == 120_000
+
+    # _get_client for a NEW key must also pass timeout_ms.
+    provider._get_client("k2")
+    assert len(captured_constructors) == 2
+    assert captured_constructors[1]["timeout_ms"] == 120_000
+
+
+async def test_timeout_raises_transient_error_on_hang() -> None:
+    """An SDK timeout (httpx.ReadTimeout) must map to TransientError and raise.
+
+    The SDK's timeout is enforced by the httpx transport layer, which we cannot
+    mock with a sleeping coroutine.  Instead we simulate what the SDK does when
+    a request exceeds its deadline: it raises httpx.ReadTimeout.  The provider
+    must map that to TransientError and raise it (with max_retries=1, no retry).
+    """
+    from avicenna.providers.mistral import MistralProvider
+
+    async def timeout_complete(*args: object, **kwargs: object) -> object:
+        # This is exactly what the SDK raises when httpx times out.
+        raise httpx.ReadTimeout("read timed out")
+
+    def _mock_client(async_fn: object) -> object:
+        return type("C", (), {"chat": type("Chat", (), {"complete_async": async_fn})()})()
+
+    provider = MistralProvider(api_key="k1", timeout=0.05, max_retries=1)
+    provider._get_client = lambda key: _mock_client(timeout_complete)  # type: ignore[return-value]
+
+    start = _time.monotonic()
+    with pytest.raises(TransientError):
+        await provider.complete(system="s", messages=[])
+    elapsed = _time.monotonic() - start
+
+    # Must be near-instant — no real waiting, just exception propagation.
+    assert elapsed < 2.0, f"took {elapsed:.1f}s; expected <2s"
+
+
+async def test_timeout_is_retried_and_does_not_quarantine_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A timeout must be retried per the retry policy (it's a TransientError)
+    and must NOT quarantine the key — the key is fine, the call hung.
+    """
+    from avicenna.providers.mistral import MistralProvider
+
+    pool = KeyPool(["k1", "k2"])
+    provider = MistralProvider(api_key="k1", pool=pool, timeout=0.05, max_retries=3)
+
+    call_count = 0
+
+    async def sometimes_hanging_complete(*args: object, **kwargs: object) -> object:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            # First call hangs (would timeout if provider had a deadline).
+            # Simulate the SDK raising a timeout exception.
+            raise httpx.ReadTimeout("read timed out")
+        return _ok_response()
+
+    def _mock_client(async_fn: object) -> object:
+        return type("C", (), {"chat": type("Chat", (), {"complete_async": async_fn})()})()
+
+    provider._get_client = lambda key: _mock_client(sometimes_hanging_complete)  # type: ignore[return-value]
+
+    async def fake_sleep(delay: float) -> None:
+        pass
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+
+    result = await provider.complete(system="s", messages=[])
+
+    assert result.text == "ok"
+    assert call_count == 2  # retried once
+    # Key must NOT be quarantined — a timeout is a TransientError, not AuthError.
+    assert pool.live_count == 2
+    assert "k1" not in pool._quarantined
+
+
+async def test_factory_injects_timeout_from_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The provider factory must resolve timeout and budget from settings when
+    not explicitly passed by the caller.
+    """
+    from avicenna.providers import _mistral_factory
+
+    captured_kwargs: dict[str, object] = {}
+
+    def tracking_mistral(**kwargs: object) -> object:
+        captured_kwargs.update(kwargs)
+        return FakeProvider(script=[])
+
+    monkeypatch.setattr("avicenna.providers.mistral.MistralProvider", tracking_mistral)
+    # Set the env vars to custom values.
+    monkeypatch.setenv("AVICENNA_PROVIDER_TIMEOUT", "300")
+    monkeypatch.setenv("AVICENNA_PROVIDER_BUDGET", "600")
+
+    _mistral_factory(api_key="k1")
+    assert captured_kwargs["timeout"] == 300.0
+    assert captured_kwargs["budget"] == 600.0
+
+
+async def test_factory_does_not_override_explicit_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When a caller passes timeout and budget explicitly, the factory must not
+    override them.
+    """
+    from avicenna.providers import _mistral_factory
+
+    captured_kwargs: dict[str, object] = {}
+
+    def tracking_mistral(**kwargs: object) -> object:
+        captured_kwargs.update(kwargs)
+        return FakeProvider(script=[])
+
+    monkeypatch.setattr("avicenna.providers.mistral.MistralProvider", tracking_mistral)
+    monkeypatch.setenv("AVICENNA_PROVIDER_TIMEOUT", "300")
+    monkeypatch.setenv("AVICENNA_PROVIDER_BUDGET", "600")
+
+    _mistral_factory(api_key="k1", timeout=90.0, budget=120.0)
+    assert captured_kwargs["timeout"] == 90.0
+    assert captured_kwargs["budget"] == 120.0
+
+
+# ------------------------------------------------------------------
+# Total-elapsed budget across retries
+# ------------------------------------------------------------------
+
+async def test_budget_bounds_total_elapsed_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A client that times out every attempt must fail once the budget is
+    spent, not after max_retries full-length attempts.
+
+    Uses a fake clock that advances by 1s per monotonic() call, a budget of
+    5s, and max_retries of 20.  The provider must raise TransientError after
+    at most 5 attempts (5s budget / 1s per tick), well before 20 retries.
+    """
+    from avicenna.providers.mistral import MistralProvider
+
+    call_count = 0
+    clock = 0.0
+
+    def fake_monotonic() -> float:
+        nonlocal clock
+        clock += 1.0  # each call advances the clock by 1s
+        return clock
+
+    async def always_timeout(*args: object, **kwargs: object) -> object:
+        nonlocal call_count
+        call_count += 1
+        raise httpx.ReadTimeout("read timed out")
+
+    def _mock_client(async_fn: object) -> object:
+        return type("C", (), {"chat": type("Chat", (), {"complete_async": async_fn})()})()
+
+    # Budget of 5s, 20 retries allowed — the budget must stop us first.
+    provider = MistralProvider(
+        api_key="k1", timeout=300.0, budget=5.0, max_retries=20,
+    )
+    provider._get_client = lambda key: _mock_client(always_timeout)  # type: ignore[return-value]
+
+    async def fake_sleep(delay: float) -> None:
+        pass
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("time.monotonic", fake_monotonic)
+
+    with pytest.raises(TransientError):
+        await provider.complete(system="s", messages=[])
+
+    # With a 5s budget and the clock advancing 1s per monotonic() call,
+    # the budget check triggers after ~5 iterations.  The exact count depends
+    # on how many times monotonic() is called per loop iteration (budget
+    # check + timeout shrinking = 2 calls per iteration).
+    assert call_count < 20, f"used {call_count} retries; budget should have stopped earlier"
+    assert call_count <= 5, f"used {call_count} retries; expected <= 5 with 5s budget"
+
+
+async def test_budget_shrinks_per_call_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The per-call timeout_ms passed to the SDK must shrink to fit the
+    remaining budget.  When the budget is nearly exhausted, the per-call
+    timeout must be smaller than the configured timeout.
+
+    Uses a fake clock that advances by 0.5s per monotonic() call.  With a
+    budget of 20s and timeout of 10s, the first call gets the full timeout
+    (budget is generous), but later calls see a shrinking budget.
+    """
+    from avicenna.providers.mistral import MistralProvider
+
+    captured_timeouts: list[int] = []
+    clock = 0.0
+
+    def fake_monotonic() -> float:
+        nonlocal clock
+        clock += 0.5
+        return clock
+
+    async def record_timeout(*args: object, **kwargs: object) -> object:
+        captured_timeouts.append(kwargs.get("timeout_ms", 0))
+        raise httpx.ReadTimeout("read timed out")
+
+    def _mock_client(async_fn: object) -> object:
+        return type("C", (), {"chat": type("Chat", (), {"complete_async": async_fn})()})()
+
+    # timeout=10s (10000ms), budget=20s.  The budget is generous enough that
+    # the first call gets the full 10s timeout.  As iterations consume clock
+    # ticks, the remaining budget shrinks and later calls get less.
+    provider = MistralProvider(
+        api_key="k1", timeout=10.0, budget=20.0, max_retries=20,
+    )
+    provider._get_client = lambda key: _mock_client(record_timeout)  # type: ignore[return-value]
+
+    async def fake_sleep(delay: float) -> None:
+        pass
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("time.monotonic", fake_monotonic)
+
+    with pytest.raises(TransientError):
+        await provider.complete(system="s", messages=[])
+
+    # At least one call should have been made.
+    assert len(captured_timeouts) >= 1
+    # The first call should get the full timeout (10s = 10000ms).
+    assert captured_timeouts[0] == 10_000
+    # As the budget depletes, the per-call timeout should shrink.
+    if len(captured_timeouts) >= 2:
+        assert captured_timeouts[-1] < captured_timeouts[0]
+
+
+async def test_no_budget_means_no_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When budget is None, the provider retries up to max_retries without
+    a total-elapsed check.
+    """
+    from avicenna.providers.mistral import MistralProvider
+
+    call_count = 0
+
+    async def always_timeout(*args: object, **kwargs: object) -> object:
+        nonlocal call_count
+        call_count += 1
+        raise httpx.ReadTimeout("read timed out")
+
+    def _mock_client(async_fn: object) -> object:
+        return type("C", (), {"chat": type("Chat", (), {"complete_async": async_fn})()})()
+
+    provider = MistralProvider(
+        api_key="k1", timeout=300.0, budget=None, max_retries=4,
+    )
+    provider._get_client = lambda key: _mock_client(always_timeout)  # type: ignore[return-value]
+
+    async def fake_sleep(delay: float) -> None:
+        pass
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+
+    with pytest.raises(TransientError):
+        await provider.complete(system="s", messages=[])
+
+    # With budget=None and max_retries=4, we get exactly 4 attempts.
+    assert call_count == 4
