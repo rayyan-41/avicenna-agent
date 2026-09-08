@@ -1020,6 +1020,13 @@ export class App {
         return;
       }
 
+      case 'TransitionsApplied':
+        this.write(
+          `transitions: ${num('accepted')} of ${num('requested')} accepted` +
+            (num('dropped') > 0 ? ` (${num('dropped')} dropped)` : ''),
+        );
+        return;
+
       case 'MocUpdated':
         this.write(`MOC updated: ${str('result')}`);
         return;

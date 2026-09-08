@@ -32,6 +32,7 @@
 | `stages.py` | 1598 | All 13 stage implementations plus `build_stages()`. Contains the write-back guard (`_write_back`), the frontmatter pipeline, the atomic note writer, wikilink resolution for weaver output, and every vault-tool call with its graceful-degradation fallback. The bulk of pipeline logic lives here. |
 | `structure.py` | 376 | Deterministic note structure: numbered headings, TOC generation, heading cleanup. Replaces the formatter model round-trip and the PowerShell TOC tool with pure Python. No LLM client imported. |
 | `toolcall.py` | 27 | Thin wrapper that emits `ToolInvoked`/`ToolReturned` around every vault tool call. The pipeline never invokes a tool directly; it goes through here so the event bus sees it. |
+| `transitions.py` | 330 | Pure transition generation: skeleton extraction, prompt construction, response parsing, validation guard, and splice. No provider, no I/O, no RunContext. The weaver becomes a transition-only stage — the note body never round-trips through a model. |
 <!-- map:files:end -->
 
 ## Invariants

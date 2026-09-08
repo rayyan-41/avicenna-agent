@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 Stage = Literal[
-    "preflight", "manifest", "sections", "assembly",
+    "preflight", "manifest", "sections", "assembly", "transitions",
     "wordcount", "tagging", "moc", "write",
 ]
 
@@ -189,12 +189,20 @@ class ThemeMinted(Event):
     registry_size: int = 0
 
 
+@dataclass(frozen=True)
+class TransitionsApplied(Event):
+    requested: int = 0
+    accepted: int = 0
+    dropped: int = 0
+
+
 __all__ = [
     "Stage", "Event", "RunStarted", "PreflightDeclared", "ManifestWritten",
     "SectionStarted", "SectionCompleted", "SectionFailed", "StageEntered",
     "StageCompleted", "ToolInvoked", "ToolReturned", "WordCountChecked",
     "MarkdownNormalised",
     "TagsProposed", "TagsValidated", "SchemaDetected", "ThemeMinted",
+    "TransitionsApplied",
     "MocUpdated", "NoteWritten", "PlanApprovalRequested", "RunFailed",
     "RunComplete", "LogMessage",
 ]

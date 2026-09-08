@@ -48,6 +48,11 @@ class RunSpec:
     #: Per-run settings overrides (from CLI flags).  Passed to the settings
     #: resolver so flag > env > vault config > default holds uniformly.
     overrides: dict[str, Any] = field(default_factory=dict)
+    #: Optional dedicated provider for the transition weaver stage.
+    # When None, TransitionStage constructs one from settings (default: gemini).
+    # Tests inject FakeProvider here so the stage exercises the pipeline
+    # without requiring real API keys.
+    weaver_provider: LLMProvider | None = None
 
 
 @dataclass
