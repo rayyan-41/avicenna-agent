@@ -26,6 +26,13 @@ from typing import Any
 
 WORDS_PER_HEADING_DEFAULT: int = 1000
 
+# Per-call API timeout for the provider client (seconds).  600s (10 min) is
+# generous enough that a legitimate ~1,000-word section generation (~90-120s
+# observed) never hits it, tight enough that a hung call does not stall the
+# pipeline for hours.  Configurable via AVICENNA_PROVIDER_TIMEOUT env var or
+# the "provider_timeout" key in vault config.
+PROVIDER_TIMEOUT_DEFAULT: float = 600.0
+
 
 # ---------------------------------------------------------------------------
 # File I/O

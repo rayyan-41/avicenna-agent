@@ -357,12 +357,9 @@ class TestTimeouts:
         assert result == 45.0
 
     async def test_weaver_timeout_none_means_no_deadline(self, tmp_path: Path) -> None:
-        """When weaver_timeout is None, the assembly stage does not wrap
-        the weaver call in wait_for — a slow weaver is not cancelled.
-
-        We verify by checking the code path: if weaver_timeout is None,
-        asyncio.wait_for is NOT called. We test this by running with a slow
-        weaver that should NOT be cancelled.
+        """The harness imposes no deadline on the weaver — the deadline lives in
+        the provider client (timeout_ms), not in an asyncio.wait_for wrapper.
+        This test verifies that a weaver completes without timeout warnings.
         """
         def slow_script(system: str, messages: list[Any]) -> Completion:
             prompt = messages[-1].content if messages else ""

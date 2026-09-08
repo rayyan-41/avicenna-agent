@@ -27,6 +27,7 @@ import random
 import time
 from typing import TYPE_CHECKING, Any, cast
 
+import httpx
 from mistralai.client import Mistral as MistralClient
 from mistralai.client.models import (
     AssistantMessage,
@@ -81,17 +82,24 @@ class MistralProvider(LLMProvider):
         self,
         api_key: str,
         model: str = "mistral-large-latest",
-        timeout: float = 120.0,
+        timeout: float = 600.0,
         max_retries: int = _MAX_RETRIES,
         pool: KeyPool | None = None,
     ) -> None:
         self._model = model
         self._max_retries = max_retries
         self._pool = pool
+        # timeout_ms is the SDK's parameter name (int, milliseconds). We store
+        # it as such so every client construction and per-call site can pass it
+        # directly without repeated conversion.  Default is 600s (10 min):
+        # generous enough that a legitimate 1,000-word section generation
+        # (~90-120s observed) never hits it, tight enough that a truly hung
+        # call does not stall the pipeline for 8,703 seconds as it did once.
+        self._timeout_ms: int = int(timeout * 1000)
         # Lazily-built clients, keyed by the API key string. When pooled, each
         # key gets its own client so we never re-create one in a hot loop.
         self._clients: dict[str, MistralClient] = {
-            api_key: MistralClient(api_key=api_key)
+            api_key: MistralClient(api_key=api_key, timeout_ms=self._timeout_ms)
         }
         self._default_key = api_key
 
@@ -99,7 +107,7 @@ class MistralProvider(LLMProvider):
         """Return a cached client for the given key, building one if needed."""
         client = self._clients.get(api_key)
         if client is None:
-            client = MistralClient(api_key=api_key)
+            client = MistralClient(api_key=api_key, timeout_ms=self._timeout_ms)
             self._clients[api_key] = client
         return client
 
@@ -146,6 +154,7 @@ class MistralProvider(LLMProvider):
                     tools=wire_tools,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    timeout_ms=self._timeout_ms,
                 )
             except Exception as exc:
                 mapped = self._map_error(exc)
@@ -340,6 +349,12 @@ class MistralProvider(LLMProvider):
 
     @staticmethod
     def _map_error(exc: Exception) -> ProviderError:
+        # Timeout from the SDK's httpx transport layer.  The key is fine — the
+        # call hung — so TransientError (retryable, no quarantine) is correct.
+        # Caught explicitly here so the mapping is intentional rather than
+        # relying on the fallthrough.
+        if isinstance(exc, httpx.TimeoutException):
+            return TransientError(str(exc))
         status = getattr(exc, "status_code", None)
         # 403 is terminal: the credential is valid but not authorised for this
         # request (e.g. a model gated behind a subscription tier).  When 403

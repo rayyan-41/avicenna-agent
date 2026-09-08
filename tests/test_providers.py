@@ -386,3 +386,159 @@ async def test_redact_applied_at_provider_level(
 
     assert result.text == "ok"
     assert "ABCDEFGHJKLMNPQRSTUVWXYza12345678" not in caplog.text
+
+
+# ------------------------------------------------------------------
+# Per-call API timeouts
+# ------------------------------------------------------------------
+
+import time as _time
+
+import httpx
+
+from avicenna.providers.errors import TransientError
+
+
+def test_timeout_reaches_sdk_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The configured timeout must be passed as timeout_ms to the SDK constructor.
+
+    Both the eager client (built in __init__) and the lazy client (built by
+    _get_client) must receive it — pooled builds construct one client per key.
+    """
+    from avicenna.providers.mistral import MistralProvider
+
+    captured_kwargs: list[dict[str, object]] = []
+    original_init = MistralProvider.__init__
+
+    # Intercept MistralClient() construction to capture its kwargs.
+    captured_constructors: list[dict[str, object]] = []
+
+    def tracking_mistral_factory(**kwargs: object) -> object:
+        captured_constructors.append(kwargs)
+        # Return a minimal mock that won't be used for actual calls.
+        return type("FakeMistral", (), {})()
+
+    monkeypatch.setattr(
+        "avicenna.providers.mistral.MistralClient", tracking_mistral_factory
+    )
+
+    provider = MistralProvider(api_key="k1", timeout=120.0)
+
+    # __init__ builds one client eagerly for the default key.
+    assert len(captured_constructors) == 1
+    assert captured_constructors[0]["timeout_ms"] == 120_000
+
+    # _get_client for a NEW key must also pass timeout_ms.
+    provider._get_client("k2")
+    assert len(captured_constructors) == 2
+    assert captured_constructors[1]["timeout_ms"] == 120_000
+
+
+async def test_timeout_raises_transient_error_on_hang() -> None:
+    """An SDK timeout (httpx.ReadTimeout) must map to TransientError and raise.
+
+    The SDK's timeout is enforced by the httpx transport layer, which we cannot
+    mock with a sleeping coroutine.  Instead we simulate what the SDK does when
+    a request exceeds its deadline: it raises httpx.ReadTimeout.  The provider
+    must map that to TransientError and raise it (with max_retries=1, no retry).
+    """
+    from avicenna.providers.mistral import MistralProvider
+
+    async def timeout_complete(*args: object, **kwargs: object) -> object:
+        # This is exactly what the SDK raises when httpx times out.
+        raise httpx.ReadTimeout("read timed out")
+
+    def _mock_client(async_fn: object) -> object:
+        return type("C", (), {"chat": type("Chat", (), {"complete_async": async_fn})()})()
+
+    provider = MistralProvider(api_key="k1", timeout=0.05, max_retries=1)
+    provider._get_client = lambda key: _mock_client(timeout_complete)  # type: ignore[return-value]
+
+    start = _time.monotonic()
+    with pytest.raises(TransientError):
+        await provider.complete(system="s", messages=[])
+    elapsed = _time.monotonic() - start
+
+    # Must be near-instant — no real waiting, just exception propagation.
+    assert elapsed < 2.0, f"took {elapsed:.1f}s; expected <2s"
+
+
+async def test_timeout_is_retried_and_does_not_quarantine_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A timeout must be retried per the retry policy (it's a TransientError)
+    and must NOT quarantine the key — the key is fine, the call hung.
+    """
+    from avicenna.providers.mistral import MistralProvider
+
+    pool = KeyPool(["k1", "k2"])
+    provider = MistralProvider(api_key="k1", pool=pool, timeout=0.05, max_retries=3)
+
+    call_count = 0
+
+    async def sometimes_hanging_complete(*args: object, **kwargs: object) -> object:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            # First call hangs (would timeout if provider had a deadline).
+            # Simulate the SDK raising a timeout exception.
+            raise httpx.ReadTimeout("read timed out")
+        return _ok_response()
+
+    def _mock_client(async_fn: object) -> object:
+        return type("C", (), {"chat": type("Chat", (), {"complete_async": async_fn})()})()
+
+    provider._get_client = lambda key: _mock_client(sometimes_hanging_complete)  # type: ignore[return-value]
+
+    async def fake_sleep(delay: float) -> None:
+        pass
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+
+    result = await provider.complete(system="s", messages=[])
+
+    assert result.text == "ok"
+    assert call_count == 2  # retried once
+    # Key must NOT be quarantined — a timeout is a TransientError, not AuthError.
+    assert pool.live_count == 2
+    assert "k1" not in pool._quarantined
+
+
+async def test_factory_injects_timeout_from_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The provider factory must resolve timeout from settings when not
+    explicitly passed by the caller.
+    """
+    from avicenna.providers import _mistral_factory
+
+    captured_kwargs: dict[str, object] = {}
+
+    def tracking_mistral(**kwargs: object) -> object:
+        captured_kwargs.update(kwargs)
+        return FakeProvider(script=[])
+
+    monkeypatch.setattr("avicenna.providers.mistral.MistralProvider", tracking_mistral)
+    # Set the env var to a custom value.
+    monkeypatch.setenv("AVICENNA_PROVIDER_TIMEOUT", "300")
+
+    _mistral_factory(api_key="k1")
+    assert captured_kwargs["timeout"] == 300.0
+
+
+async def test_factory_does_not_override_explicit_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When a caller passes timeout explicitly, the factory must not override it."""
+    from avicenna.providers import _mistral_factory
+
+    captured_kwargs: dict[str, object] = {}
+
+    def tracking_mistral(**kwargs: object) -> object:
+        captured_kwargs.update(kwargs)
+        return FakeProvider(script=[])
+
+    monkeypatch.setattr("avicenna.providers.mistral.MistralProvider", tracking_mistral)
+    monkeypatch.setenv("AVICENNA_PROVIDER_TIMEOUT", "300")
+
+    _mistral_factory(api_key="k1", timeout=90.0)
+    assert captured_kwargs["timeout"] == 90.0
