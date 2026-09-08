@@ -86,6 +86,253 @@ def semantic_guard(
 
 
 # ---------------------------------------------------------------------------
+# Surgical JSON editing
+# ---------------------------------------------------------------------------
+# persist() operates on the file's text rather than reserialising a dict,
+# because json.dumps destroys the user's formatting: inline arrays get
+# expanded, blank lines vanish, key order drifts.  A taxonomy.json that is
+# hand-authored by the user must leave the harness byte-identical in every
+# position the mutation did not touch.
+#
+# The two primitives are append_to_array and set_key_in_object.  Each
+# returns the edited text, or None when the structure does not match
+# expectations — at which point persist() falls back to reserialisation.
+
+
+def _find_json_colon(text: str, key: str) -> int:
+    """Find the colon after *key* in *text*.
+
+    Returns the position of the colon, or -1 if the key is not a JSON key
+    in *text* (absent, or embedded inside a string value rather than being
+    a key itself).  Only exact key matches are returned — the character
+    after the closing quote must be whitespace or a colon.
+    """
+    qkey = json.dumps(key, ensure_ascii=False)
+    pos = 0
+    while True:
+        idx = text.find(qkey, pos)
+        if idx == -1:
+            return -1
+        after = idx + len(qkey)
+        if after < len(text) and text[after] in " \t\n\r:":
+            colon = text.find(":", after)
+            return colon if colon != -1 else -1
+        pos = after
+
+
+def _find_object_end(text: str, start: int) -> int:
+    """Find the closing ``}`` of an object whose opening ``{`` is at *start*.
+
+    Returns -1 on malformed input.  Handles nested braces inside strings
+    (e.g. ``"a { b } c"``) and nested structures.
+    """
+    depth = 0
+    in_string = False
+    i = start
+    while i < len(text):
+        c = text[i]
+        if in_string:
+            if c == "\\":
+                i += 2
+                continue
+            if c == '"':
+                in_string = False
+        else:
+            if c == '"':
+                in_string = True
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    return i
+        i += 1
+    return -1
+
+
+def _append_to_array(
+    text: str,
+    key: str,
+    items: list[str],
+) -> str | None:
+    """Append *items* to the JSON array at ``"key"`` in *text*.
+
+    Matches the array's existing style: inline arrays stay inline, multiline
+    arrays follow the detected indentation.  Returns the edited text, or
+    ``None`` if the key or array cannot be located.
+    """
+    colon = _find_json_colon(text, key)
+    if colon == -1:
+        return None
+    bracket = text.find("[", colon + 1)
+    if bracket == -1:
+        return None
+    # Count brackets to find the matching close, skipping strings.
+    depth = 0
+    in_str = False
+    end = -1
+    i = bracket
+    while i < len(text):
+        c = text[i]
+        if in_str:
+            if c == "\\":
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+        else:
+            if c == '"':
+                in_str = True
+            elif c == "[":
+                depth += 1
+            elif c == "]":
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
+        i += 1
+    if end == -1:
+        return None
+
+    content = text[bracket + 1 : end].strip()
+
+    if not content:
+        # Empty array — stay inline:  []
+        new_items = ", ".join(f'"{it}"' for it in items)
+        return text[: bracket + 1] + new_items + text[end:]
+
+    # Detect whether the array is inline (no newlines between [ and ]).
+    between = text[bracket + 1 : end]
+    is_inline = "\n" not in between
+
+    if is_inline:
+        # Stay inline:  append after the last element.
+        new_items = ", ".join(f'"{it}"' for it in items)
+        return text[: end] + ", " + new_items + text[end:]
+
+    # Multiline — detect item indentation from the last line before ].
+    pre_close = text[:end]
+    last_item_end = pre_close.rstrip()
+    last_line_start = last_item_end.rfind("\n")
+    if last_line_start == -1:
+        return None
+    last_line = last_item_end[last_line_start:]
+    item_indent = ""
+    for ch in last_line:
+        if ch in " \t":
+            item_indent += ch
+        else:
+            break
+
+    new_lines = ",\n".join(f'{item_indent}"{it}"' for it in items)
+    return text[:end] + ",\n" + new_lines + text[end:]
+
+
+def _set_key_in_object(
+    text: str,
+    obj_key: str,
+    items: list[str],
+) -> str | None:
+    """Set a key in the object at ``"obj_key"`` in *text*.
+
+    Creates the object if absent (using the indentation of the file's root
+    object).  If the object already has entries, appends after the last one.
+    Returns the edited text, or ``None`` if the parent object cannot be
+    located.
+    """
+    colon = _find_json_colon(text, obj_key)
+    if colon != -1:
+        brace = text.find("{", colon + 1)
+        if brace == -1:
+            return None
+        end = _find_object_end(text, brace)
+        if end == -1:
+            return None
+
+        content = text[brace + 1 : end].strip()
+        entry = ", ".join(f'"{k}": 1' for k in items)
+
+        if not content:
+            # Detect indent from the key line.
+            line_start = text.rfind("\n", 0, colon)
+            if line_start == -1:
+                return None
+            key_line = text[line_start + 1 : colon]
+            key_indent = ""
+            for ch in key_line:
+                if ch in " \t":
+                    key_indent += ch
+                else:
+                    break
+            inner = key_indent + "  "
+            return (
+                text[: brace + 1]
+                + "\n" + inner + entry
+                + "\n" + key_indent
+                + text[end:]
+            )
+
+        # Find the last real content character before `}` to detect
+        # indentation and to insert the comma on the correct line.
+        # Between the last entry and `}` there is whitespace (the indent
+        # of `}`).  We insert right after the entry, so the comma lands
+        # on the same line and the new entry goes on the next.
+        content_raw = text[brace + 1 : end]
+        last_content_stripped = content_raw.rstrip()
+        last_line_start = last_content_stripped.rfind("\n")
+        if last_line_start == -1:
+            return None
+        last_line = last_content_stripped[last_line_start:]
+        entry_indent = ""
+        for ch in last_line:
+            if ch in " \t":
+                entry_indent += ch
+            else:
+                break
+
+        # Insert right after the last entry content, before the
+        # whitespace that precedes `}`.
+        insert_pos = brace + 1 + len(last_content_stripped)
+        return (
+            text[:insert_pos]
+            + ",\n" + entry_indent + entry
+            + text[insert_pos:]
+        )
+
+    # Key absent — create the object inside the root.  The root object
+    # is the outermost pair of braces; its `}` is the last `}` in the
+    # file (assuming well-formed JSON without trailing junk).
+    root_end = text.rfind("}")
+    if root_end == -1:
+        return None
+
+    # Derive indentation from the last content line before the root `}`.
+    before_root = text[:root_end].rstrip()
+    last_nl = before_root.rfind("\n")
+    if last_nl == -1:
+        return None
+    last_line = before_root[last_nl + 1:]
+    key_indent = ""
+    for ch in last_line:
+        if ch in " \t":
+            key_indent += ch
+        else:
+            break
+
+    inner = key_indent + "  "
+    entry = ", ".join(f'"{k}": 1' for k in items)
+    insert_pos = len(before_root)
+
+    qkey = json.dumps(obj_key, ensure_ascii=False)
+    insertion = (
+        ",\n" + key_indent + qkey + ": {"
+        + "\n" + inner + entry
+        + "\n" + key_indent + "}"
+    )
+    return text[:insert_pos] + insertion + text[insert_pos:]
+
+
+# ---------------------------------------------------------------------------
 # ThemeRegistry
 # ---------------------------------------------------------------------------
 
@@ -284,22 +531,20 @@ class ThemeRegistry:
     def persist(self) -> bool:
         """Atomically write taxonomy.json if the registry was mutated.
 
-        Preserves key order, existing indentation style, and every key the
-        file carries.  Returns ``True`` if the write succeeded, ``False``
-        if the file was unwritable (the run must continue with the tags
-        validated against what is already there).
+        Makes surgical text edits: every byte not involved in the mutation
+        stays identical, including inline arrays, blank lines, key order and
+        ``$comment`` keys.  When the file's structure does not match
+        expectations (an array the file does not contain, an unexpected
+        layout), falls back to full reserialisation with detected
+        indentation — the file is still written correctly, just reformatted.
 
-        When themes carry a ``_counts`` mapping alongside the array, the
-        counts are persisted too.  This is a schema extension that lives
-        inside the raw dict and is invisible to ``Taxonomy.load`` (which
-        ignores unknown keys).  If the vault's taxonomy.json already has
-        a ``_counts`` key it is preserved; otherwise one is created when
-        the first theme is minted.
+        Returns ``True`` if the write succeeded, ``False`` if the file was
+        unwritable (the run continues with the tags already on disk).
         """
         if not self._dirty:
             return True
 
-        # Update counts if we have a _counts mapping.
+        # Update counts in self.raw — the surgical edit reads these.
         counts: dict[str, int] = self.raw.setdefault("_themeCounts", {})
         for t in self._minted_themes:
             counts[t] = counts.get(t, 0) + 1
@@ -307,21 +552,65 @@ class ThemeRegistry:
         for t in self._minted_types:
             type_counts[t] = type_counts.get(t, 0) + 1
 
-        # Detect indentation from the existing file.
-        indent = self._detect_indent()
         tmp = self.taxonomy_path.with_suffix(".json.part")
         try:
-            tmp.write_text(
-                json.dumps(self.raw, indent=indent, ensure_ascii=False) + "\n",
-                encoding="utf-8",
-                newline="\n",
-            )
+            ok = self._surgical_persist(tmp)
+            if not ok:
+                self._fallback_persist(tmp)
             os.replace(tmp, self.taxonomy_path)
         except OSError:
             tmp.unlink(missing_ok=True)
             return False
         self._dirty = False
         return True
+
+    def _surgical_persist(self, tmp: Path) -> bool:
+        """Attempt surgical text edits.  Returns False to trigger fallback."""
+        try:
+            text = self.taxonomy_path.read_text("utf-8")
+            original = json.loads(text)
+        except (OSError, json.JSONDecodeError):
+            return False
+
+        # Build the ordered list of mutations to apply.
+        mutations: list[tuple[str, str, list[str]]] = []
+        if self._minted_themes:
+            mutations.append(("themes", "_themeCounts", self._minted_themes))
+        if self._minted_types:
+            mutations.append(("types", "_typeCounts", self._minted_types))
+
+        # Apply mutations sequentially — each sees the text produced by the
+        # previous one, so offsets stay valid.
+        for array_key, counts_key, items in mutations:
+            new_text = _append_to_array(text, array_key, items)
+            if new_text is None:
+                return False
+            text = new_text
+            new_text = _set_key_in_object(text, counts_key, items)
+            if new_text is None:
+                return False
+            text = new_text
+
+        # Verify the result still parses and carries every original key.
+        try:
+            result = json.loads(text)
+        except json.JSONDecodeError:
+            return False
+        for key in original:
+            if key not in result:
+                return False
+
+        tmp.write_text(text, encoding="utf-8", newline="\n")
+        return True
+
+    def _fallback_persist(self, tmp: Path) -> None:
+        """Full reserialisation when surgical editing cannot apply."""
+        indent = self._detect_indent()
+        tmp.write_text(
+            json.dumps(self.raw, indent=indent, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
 
     def _detect_indent(self) -> int:
         """Detect the indentation level of the existing file."""

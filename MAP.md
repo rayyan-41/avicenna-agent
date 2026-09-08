@@ -168,6 +168,7 @@ and the TUI job on `ubuntu-latest`.
 | `AVICENNA.md` | 15 | A pointer to the two documents above, kept so historical inbound links still land somewhere useful. |
 | `CLAUDE.md` | 159 | The short operational layer for coding agents: where things live, the commands, and the rules that bite from inside an editor. |
 | `README.md` | 184 | User-facing overview: installation, quick start, and the command table. |
+| `TASK.md` | 163 | Task description for the current worktree session (surgical taxonomy persistence). |
 <!-- map:files:end -->
 
 `pyproject.toml` is the sole dependency manifest and declares the `avicenna`
