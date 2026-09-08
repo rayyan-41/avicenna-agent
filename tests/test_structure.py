@@ -563,3 +563,69 @@ class TestNumbering:
         headings = _headings(result.text)
         h1 = [h for h in headings if h.startswith("# ") and not h.startswith("## ")]
         assert len(h1) == 1
+
+
+class TestSubHeadingDemotion:
+    """Promoting a section must push its sub-headings down with it.
+
+    Numbering turns `## Section` into `### N. Section`, which is the level the
+    section agents' own sub-headings already use.  A live note came back with
+    nineteen `###` headings of which eleven were sections, so in Obsidian's
+    outline a sub-point sat as a sibling of the section containing it.
+    """
+
+    NOTE = (
+        "# The Title\n\n"
+        "## First Section\n\nBody.\n\n"
+        "### A Sub Point\n\nMore.\n\n"
+        "#### Deeper\n\nDeep.\n\n"
+        "## Second Section\n\nBody.\n"
+    )
+
+    @staticmethod
+    def _levels(text: str) -> list[str]:
+        return [ln for ln in text.split("\n") if ln.startswith("#")]
+
+    def test_sections_and_subheadings_end_on_different_levels(self) -> None:
+        out = apply_structure(self.NOTE).text
+        assert "### 1. First Section" in out
+        assert "### 2. Second Section" in out
+        assert "#### A Sub Point" in out
+        assert "##### Deeper" in out
+
+    def test_counter_reports_the_demotions(self) -> None:
+        assert apply_structure(self.NOTE).subheadings_demoted == 2
+
+    def test_demotion_is_idempotent(self) -> None:
+        """The guard that makes this safe to run twice.
+
+        Demotion is conditional on there being `## ` sections left to promote.
+        A second pass finds none, so it demotes nothing — without that guard
+        every sub-heading would sink one level on each application, and the
+        note is passed through this function by more than one stage.
+        """
+        once = apply_structure(self.NOTE).text
+        twice = apply_structure(once).text
+        assert twice == once
+        assert apply_structure(once).subheadings_demoted == 0
+
+    def test_level_six_is_the_floor(self) -> None:
+        """Markdown has no `#######`; a level-6 heading stays put."""
+        out = apply_structure("# T\n\n## S\n\nb\n\n###### Floor\n\nx\n").text
+        assert "###### Floor" in out
+        assert "####### " not in out
+
+    def test_toc_lists_sections_only(self) -> None:
+        """Sub-headings are deliberately absent from the TOC."""
+        out = apply_structure(self.NOTE).text
+        toc = [ln for ln in out.split("\n") if ln.lstrip().startswith("> - ")]
+        assert len(toc) == 2
+        assert not any("Sub Point" in ln or "Deeper" in ln for ln in toc)
+
+    def test_every_toc_anchor_resolves_after_demotion(self) -> None:
+        out = apply_structure(self.NOTE).text
+        headings = {ln.lstrip("#").strip() for ln in self._levels(out)}
+        anchors = re.findall(r"\[\[#([^\]|]+)", out)
+        assert anchors
+        for anchor in anchors:
+            assert anchor in headings, (anchor, headings)

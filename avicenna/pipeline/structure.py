@@ -53,6 +53,7 @@ class StructureResult:
     headings_numbered: int = 0
     headings_stripped: int = 0
     stray_demoted: int = 0
+    subheadings_demoted: int = 0
     toc_added: bool = False
 
 
@@ -239,9 +240,14 @@ def apply_structure(text: str) -> StructureResult:
     Operations, in order:
 
     1. Number section headings (``## Heading`` -> ``### N. Heading``).
-    2. Strip repeated headings (section body restating its own heading).
-    3. Demote stray top-level headings (``#`` in body -> ``##``).
-    4. Generate the TOC callout.
+    2. Demote the sub-headings underneath them by one level, so promoting a
+       section does not make it a sibling of its own sub-headings.
+    3. Strip repeated headings (section body restating its own heading).
+    4. Demote stray top-level headings (``#`` in body -> ``##``).
+    5. Generate the TOC callout, listing sections only.
+
+    The TOC deliberately lists sections and not sub-headings: a ten-thousand
+    word note has enough of the latter to bury the former.
 
     The frontmatter block and fenced code blocks are untouched.
     """
@@ -271,6 +277,7 @@ def apply_structure(text: str) -> StructureResult:
     headings_numbered = 0
     headings_stripped = 0
     stray_demoted = 0
+    subheadings_demoted = 0
     section_counter = 0
 
     # Track which section we are inside (None = before first section).
@@ -320,6 +327,31 @@ def apply_structure(text: str) -> StructureResult:
                 out.append(new_heading)
                 current_section_text = clean.lower()
                 first_content_seen = False
+                continue
+
+            # --- sub-heading under a section --------------------------------
+            # Numbering promotes `## Section` to `### N. Section`, which lands
+            # it on the level the section agents' own sub-headings already
+            # occupy.  A live note came out with nineteen `###` headings of
+            # which eleven were sections: in Obsidian's outline a sub-point sat
+            # as a sibling of the sections it belonged under.  Promoting the
+            # parent has to push the children down with it.
+            #
+            # Guarded on `section_indices` so the pass stays idempotent.  A
+            # second application sees no `## ` headings left to promote, so it
+            # demotes nothing — without the guard it would walk every
+            # sub-heading one level deeper on each call.  Level 6 is Markdown's
+            # floor, so a `######` sub-heading stays where it is rather than
+            # becoming body text.
+            if (
+                section_indices
+                and len(level) >= 3
+                and current_section_text is not None
+            ):
+                new_level = "#" * min(len(level) + 1, 6)
+                if new_level != level:
+                    subheadings_demoted += 1
+                out.append(f"{new_level} {txt}")
                 continue
 
             # Stray top-level heading in body — demote, not delete.
@@ -372,5 +404,6 @@ def apply_structure(text: str) -> StructureResult:
         headings_numbered=headings_numbered,
         headings_stripped=headings_stripped,
         stray_demoted=stray_demoted,
+        subheadings_demoted=subheadings_demoted,
         toc_added=True,
     )

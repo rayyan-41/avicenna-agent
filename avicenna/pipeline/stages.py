@@ -1421,6 +1421,7 @@ class FormatterStage(PipelineStage):
             text=(
                 f"structure: {result.headings_numbered} headings numbered, "
                 f"{result.headings_stripped} repeated headings stripped, "
+                f"{result.subheadings_demoted} sub-headings demoted, "
                 f"{result.stray_demoted} stray headings demoted"
             ),
         )
