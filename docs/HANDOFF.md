@@ -297,7 +297,38 @@ through the `weaver_provider` seam and never builds a real one.
 
 ---
 
+## taxonomy.json is edited, not rewritten
+
+`persist()` reserialised the whole document with `json.dumps(indent=2)`, so
+adding four themes to the user's hand-authored source of truth produced a
+**118-line diff**: every inline array expanded to one element per line and every
+blank line vanished. Its docstring claimed it "preserves key order, existing
+indentation style, and every key the file carries." It did not. The same mint
+now changes four lines.
+
+**Verify a formatting-sensitive change against the real file, not a fixture.**
+The first implementation passed ten tests on a synthetic taxonomy and, on the
+user's actual one, appended the new tags into `schema.arity.themes` — the arity
+pair `[1, 3]` declaring how many themes a note may carry — because the key
+locator took the first textual occurrence of `"themes"` at any nesting depth,
+and the arity one comes first. The file still parsed, so nothing downstream
+would have complained; the validator would simply have read an arity of
+`[1, 3, "some-tag"]`. Corrupting the schema is worse than the reformatting the
+change set out to prevent. The fixture had no nested key shadowing a top-level
+one, so it could not have caught it.
+
+---
+
 ## Rules learned the hard way
+
+**A worktree that runs `pip install -e` repoints the editable install for the
+whole machine.** After one parallel agent installed inside its worktree,
+`import avicenna` from anywhere without the working directory on `sys.path`
+resolved to *that worktree's* code. Test runs were unaffected — `python -m
+pytest` and the `pythonpath` ini both put the working directory first — but any
+bare `python script.py` silently imported another branch. Check
+`__editable___*_finder.py` if imports look impossible, and reinstall from the
+repo root after merging worktrees.
 
 **`CLAUDE.md`'s Commands section is a subset of what CI actually runs.** This
 cost real time this session — an agent shipped work that passed every gate it
