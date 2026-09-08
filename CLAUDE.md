@@ -99,8 +99,9 @@ to attach to.
 # backend
 pip install -e ".[dev]"
 pytest -q
-mypy --strict avicenna/providers avicenna/pipeline   # must be clean
+mypy --strict avicenna/providers avicenna/pipeline avicenna/bridge   # must be clean
 python scripts/check_protocol_parity.py              # events.py vs protocol.ts
+python scripts/check_maps.py                         # MAP.md inventory
 
 # frontend
 cd tui && npm ci && npm run typecheck && npm run build && npm test
@@ -108,6 +109,17 @@ cd tui && npm ci && npm run typecheck && npm run build && npm test
 # drive the backend without a terminal
 echo '{"type":"req","id":"1","method":"vault.info","params":{}}' | python -m avicenna.bridge
 ```
+
+**This list is not the whole build.** `.github/workflows/ci.yml` is the
+authority, and it runs two more checks that have no script and are easy to miss:
+a lint for `print(` to stdout outside `avicenna/cli/`, and a check that every
+module declares `from __future__ import annotations`. Read the workflow before
+claiming a change is green.
+
+The print lint matches **one line at a time**, so a `print(` whose
+`file=sys.stderr` sits on a later line fails it even though it writes to stderr.
+Use `warn()` from `avicenna/config.py` rather than hand-rolling one — this has
+already cost a rewrite.
 
 CI runs the Python job on `windows-latest` (vault tools shell out to
 PowerShell) and the TUI job on `ubuntu-latest`.
