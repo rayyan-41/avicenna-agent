@@ -318,12 +318,26 @@ async def test_google_embed_empty_texts():
     assert result == []
 
 
-async def test_google_embed_missing_key_raises_message():
-    """Missing key for the google provider raises with a helpful message."""
-    from avicenna.keypool import load_pool
+async def test_google_embed_missing_key_raises_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing key for the google provider raises with a helpful message.
+
+    Every source load_pool consults is stubbed out.  This test asserted a
+    RuntimeError while reading the developer's real ~/.avicenna/api_keys_pool,
+    so it passed only on machines that happened to have no Google key and
+    started failing the moment one was added.  A test whose verdict depends on
+    the machine it runs on is not a test.
+    """
+    import avicenna.keypool as keypool
+    import avicenna.secrets as secrets
+
+    monkeypatch.delenv("GOOGLE_API_KEYS", raising=False)
+    monkeypatch.setattr(keypool, "load_pool_file", lambda: {})
+    monkeypatch.setattr(secrets, "read_api_key", lambda provider=None: None)
 
     with pytest.raises(RuntimeError) as exc_info:
-        load_pool("google")
+        keypool.load_pool("google")
 
     msg = str(exc_info.value)
     assert "google" in msg.lower() or "GOOGLE_API_KEYS" in msg
