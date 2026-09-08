@@ -185,12 +185,26 @@ class TestTocAnchors:
     This is the most important test: a TOC link that does not resolve is worse
     than no TOC at all.  We test with punctuation, colons, ampersands,
     em-dashes, non-ASCII characters, and duplicate heading text.
+
+    The invariant must hold for BOTH code paths:
+    - generate_toc standalone (pre-numbering, used in apply_structure)
+    - apply_structure (post-numbering, the full pass)
     """
 
     def _assert_anchors_match(self, text: str) -> None:
+        """Verify the anchor invariant for both pre- and post-numbering paths."""
+        # Post-numbering: apply_structure
         result = apply_structure(text)
-        links = _toc_links(result.text)
-        heading_texts = _heading_texts(result.text)
+        self._check_anchors(result.text)
+
+        # Pre-numbering: generate_toc standalone
+        toc_only = generate_toc(text)
+        self._check_anchors(toc_only)
+
+    @staticmethod
+    def _check_anchors(text: str) -> None:
+        links = _toc_links(text)
+        heading_texts = _heading_texts(text)
         heading_set = {h.lower() for h in heading_texts}
         for link in links:
             assert link.lower() in heading_set, (
@@ -270,9 +284,19 @@ class TestTocAnchors:
 
 
 class TestDuplicateHeadings:
-    """Two sections with identical text produce distinct anchors."""
+    """Duplicate heading text is handled correctly in both paths.
 
-    def test_duplicates_get_numbered_differently(self) -> None:
+    After apply_structure (numbering): duplicates become 1. X / 2. X, so
+    TOC anchors are distinct and all resolve.
+
+    After generate_toc standalone (no numbering): duplicates produce
+    identical anchors.  Obsidian resolves [[#X]] to the first matching
+    heading, so the links resolve — to the same target.  We do not invent
+    suffixes that exist nowhere in the document.
+    """
+
+    def test_numbered_duplicates_resolve(self) -> None:
+        """After numbering, duplicate text produces distinct anchors."""
         text = (
             "---\ntitle: T\n---\n\n"
             "# Topic\n\n"
@@ -282,11 +306,34 @@ class TestDuplicateHeadings:
         )
         result = apply_structure(text)
         links = _toc_links(result.text)
-        # After numbering: "1. Same Name", "2. Different", "3. Same Name"
-        # The second "Same Name" should get a suffix in the TOC.
         assert len(links) == 3
-        # The anchors should all be distinct.
+        # After numbering: "1. Same Name", "2. Different", "3. Same Name"
         assert len(set(link.lower() for link in links)) == 3
+        # Each must resolve.
+        heading_set = {h.lower() for h in _heading_texts(result.text)}
+        for link in links:
+            assert link.lower() in heading_set
+
+    def test_unnumbered_duplicates_resolve_to_first(self) -> None:
+        """Before numbering, duplicate text produces identical anchors that
+        resolve to the first occurrence (Obsidian's behavior)."""
+        text = (
+            "---\ntitle: T\n---\n\n"
+            "# Topic\n\n"
+            "## Foo\n\nbody\n\n"
+            "## Foo\n\nbody\n\n"
+            "## Bar\n\nbody\n"
+        )
+        result = generate_toc(text)
+        links = _toc_links(result)
+        # Both [[#Foo]] links resolve — Obsidian picks the first heading.
+        heading_set = {h.lower() for h in _heading_texts(result)}
+        for link in links:
+            assert link.lower() in heading_set, (
+                f"[[#{link}]] does not match any heading"
+            )
+        # The links are identical (both "Foo"), not suffixed.
+        assert links == ["Foo", "Foo", "Bar"]
 
     def test_three_identical_headings(self) -> None:
         text = (
@@ -299,6 +346,7 @@ class TestDuplicateHeadings:
         result = apply_structure(text)
         links = _toc_links(result.text)
         assert len(links) == 3
+        # After numbering: 1. X, 2. X, 3. X — all distinct.
         assert len(set(link.lower() for link in links)) == 3
 
 

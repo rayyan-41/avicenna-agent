@@ -166,15 +166,15 @@ def generate_toc(text: str) -> str:
 
     Identifies section headings in both pre-numbering (``## Heading``) and
     post-numbering (``### N. Heading``) forms, so it works correctly when
-    called from :class:`TocStage` (before numbering) and from
-    :func:`apply_structure` (after numbering).
+    called from :func:`apply_structure` (after numbering, where duplicate
+    text produces unique anchors like ``1. X`` / ``2. X``).
 
-    Duplicate heading text is disambiguated with a numeric suffix: the
-    first occurrence has no suffix, subsequent ones get -1, -2, etc.
-    This is safe because numbered headings always have unique text
-    (``1. X`` vs ``2. X``), and for unnumbered headings the suffix
-    prevents anchor collisions that would silently link to the wrong
-    section.
+    Duplicate heading text in the unnumbered form produces identical
+    anchors.  Obsidian resolves ``[[#Foo]]`` to the *first* matching
+    heading, so both entries resolve — to the same target.  We do not
+    invent suffixes like ``Foo-1``: those anchors exist nowhere in the
+    document and produce links to nothing, which is worse than two links
+    to the same place.
     """
     fm, body = _split_frontmatter(text)
     lines = body.split("\n")
@@ -198,16 +198,8 @@ def generate_toc(text: str) -> str:
 
     # Build the TOC callout lines.
     toc_lines: list[str] = ["> [!abstract]- Table of Contents"]
-    seen: dict[str, int] = {}
     for _idx, _lvl, txt in section_headings:
-        anchor = txt
-        key = anchor.lower()
-        if key in seen:
-            seen[key] += 1
-            anchor = f"{anchor}-{seen[key]}"
-        else:
-            seen[key] = 0
-        toc_lines.append(f"> - [[#{anchor}]]")
+        toc_lines.append(f"> - [[#{txt}]]")
 
     toc_block = "\n".join(toc_lines)
 
