@@ -148,6 +148,16 @@ class NoteWritten(Event):
 
 
 @dataclass(frozen=True)
+class PlanApprovalRequested(Event):
+    topic: str = ""
+    domain: str = ""
+    template: str = ""
+    headings: tuple[str, ...] = ()
+    target_words: int = 0
+    concurrency: int = 0
+
+
+@dataclass(frozen=True)
 class RunFailed(Event):
     error: str = ""
     stage: Stage | None = None
@@ -179,6 +189,6 @@ __all__ = [
     "StageCompleted", "ToolInvoked", "ToolReturned", "WordCountChecked",
     "MarkdownNormalised",
     "TagsProposed", "TagsValidated", "SchemaDetected", "ThemeMinted",
-    "MocUpdated", "NoteWritten", "RunFailed",
+    "MocUpdated", "NoteWritten", "PlanApprovalRequested", "RunFailed",
     "RunComplete", "LogMessage",
 ]

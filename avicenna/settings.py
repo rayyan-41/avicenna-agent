@@ -32,6 +32,11 @@ WORDS_PER_HEADING_DEFAULT: int = 1000
 # Six matches the comparable project the user pointed at; the upper bound is
 # deliberately conservative — an unbounded value turns a config typo into a
 # 429 storm with no recovery path.
+#
+# The APPROVED path (human gate) bypasses this ceiling: concurrency is set to
+# the heading count, which is bounded by parse_preflight's 40-heading refusal.
+# The clamp applies only to the CONFIGURED path (CLI flag, env var, vault
+# config), where a typo has no human between it and the provider.
 MAX_CONCURRENCY_DEFAULT: int = 6
 MAX_CONCURRENCY_MIN: int = 1
 MAX_CONCURRENCY_MAX: int = 16

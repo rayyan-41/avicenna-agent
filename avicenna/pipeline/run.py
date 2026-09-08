@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from avicenna.bus import EventBus
 from avicenna.events import RunComplete, RunFailed, RunStarted
@@ -15,6 +16,9 @@ from avicenna.pipeline.stage import PipelineAbort, PipelineRunner
 from avicenna.pipeline.stages import build_stages
 from avicenna.providers.base import LLMProvider
 from avicenna.settings import load_vault_config, resolve_concurrency
+
+if TYPE_CHECKING:
+    from avicenna.pipeline.preflight import PreflightDeclaration
 
 
 #: Stage identities that constitute a dry run: decide the agent, then declare
@@ -38,6 +42,7 @@ async def execute_run(
     fresh: bool = True,
     resume: bool = False,
     overrides: dict[str, Any] | None = None,
+    on_plan: Callable[[PreflightDeclaration], Awaitable[bool]] | None = None,
 ) -> None:
     rid = run_id or str(uuid.uuid4())[:8]
     bus = bus or EventBus()
@@ -59,7 +64,7 @@ async def execute_run(
         template_override=template_override,
         overrides=effective_overrides,
     )
-    ctx = RunContext(spec=spec)
+    ctx = RunContext(spec=spec, on_plan=on_plan)
     await bus.emit(RunStarted(
         run_id=rid, topic=topic,
         provider=provider.name, model=getattr(provider, '_model', ''),

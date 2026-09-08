@@ -9,7 +9,8 @@ from typing import Any
 
 from avicenna.events import (
     LogMessage, ManifestWritten, MarkdownNormalised,
-    MocUpdated, NoteWritten, PreflightDeclared, SchemaDetected, Stage,
+    MocUpdated, NoteWritten, PlanApprovalRequested, PreflightDeclared,
+    SchemaDetected, Stage,
     TagsProposed, TagsValidated, ThemeMinted, WordCountChecked,
 )
 from avicenna.pipeline.normalise import normalise_markdown
@@ -681,6 +682,28 @@ class PreflightStage(PipelineStage):
             topic=decl.topic, domain=decl.domain, template=decl.template,
             headings=decl.headings, target_words=decl.target_words, slug=decl.slug,
         )
+
+        # --- approval gate ---------------------------------------------------
+        # When on_plan is set, the human (or an explicit auto-approve) decides
+        # whether this plan should run.  Approval sets concurrency to the
+        # heading count — one API call per heading, all concurrent — which is
+        # safe because a human has seen the number.  The configured ceiling
+        # (MAX_CONCURRENCY_MAX) does not apply here; the real upper bound is
+        # parse_preflight's 40-heading refusal.  When on_plan is None no gate
+        # runs and concurrency stays on the configured precedence chain —
+        # this is the default that keeps tests, gen_matrix and the bridge
+        # unchanged.
+        if ctx.on_plan is not None:
+            approved_concurrency = len(decl.headings)
+            await ctx.emit(PlanApprovalRequested,
+                topic=decl.topic, domain=decl.domain, template=decl.template,
+                headings=decl.headings, target_words=decl.target_words,
+                concurrency=approved_concurrency,
+            )
+            approved = await ctx.on_plan(decl)
+            if not approved:
+                raise PipelineAbort("preflight", "plan declined by user")
+            ctx.approved_concurrency = approved_concurrency
 
 
 class ResumeStage(PipelineStage):
