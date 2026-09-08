@@ -28,7 +28,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-asyncio", "mypy"]
+# types-PyYAML is a gate dependency, not a convenience: `mypy --strict` fails
+# with "Library stubs not installed for yaml" without it.  It went undeclared
+# because it happened to be present in a developer environment, and CI never
+# reached the type-check step to say otherwise.
+dev = ["pytest", "pytest-asyncio", "mypy", "types-PyYAML"]
 # The `gemini` extra is gone with the code that used it. It existed solely for
 # MCPClientManager.get_gemini_tools, which had no callers and imported a vendor
 # SDK outside avicenna/providers/ — a boundary the provider layer exists to hold.
