@@ -21,8 +21,9 @@ and functionCall parts in the response map back to ToolCall.  Gemini does not
 provide tool-call IDs natively — we generate synthetic ones (``gemini-{n}``)
 that are stable within a single response.
 
-Default model: gemini-2.5-flash (verified live 2026-09-08: 36 Gemini models
-available, gemini-2.5-flash is a stable release suitable for long-context
+Default model: gemini-3.6-flash (verified live 2026-09-08 by a real completion;
+the free tier's request quota is per model per day, so which model is chosen
+also decides which daily bucket the weaver spends from, suitable for long-context
 generation with a 1M-token context window).
 """
 
@@ -60,11 +61,19 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 
 _BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
-# Verified live 2026-09-08: 36 Gemini models available.  gemini-2.5-flash is
-# a stable release with a 1M-token context window, suitable for the weaver's
-# long-form generation.  Configurable via GOOGLE_COMPLETION_MODEL env var or
-# the "gemini_model" key in settings.
-_DEFAULT_MODEL = "models/gemini-2.5-flash"
+# Verified live 2026-09-08 by an actual completion, not a model listing.
+#
+# This was gemini-2.5-flash, which is now a generation behind: the API's own
+# 404 for the retired gemini-2.0-flash names gemini-3.6-flash as the current
+# model.  The free tier's GenerateRequestsPerDayPerProjectPerModel quota is
+# twenty requests **per model per day**, so the choice of model also decides
+# which daily bucket the weaver spends from -- one that a few verification
+# probes can exhaust.  A weaver that is out of quota degrades silently by
+# design, leaving the note unwoven, so this default is worth keeping current.
+#
+# Configurable via the GOOGLE_COMPLETION_MODEL env var or the "gemini_model"
+# key in settings.
+_DEFAULT_MODEL = "models/gemini-3.6-flash"
 _MAX_RETRIES = 4
 _BASE_DELAY = 1.0
 
