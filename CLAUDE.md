@@ -7,6 +7,10 @@ the doctrine, the architecture and the conventions. This file does not repeat
 it — it is the short operational layer on top, plus the things that are easy to
 get wrong from inside an editor.
 
+**If [docs/HANDOFF.md](docs/HANDOFF.md) exists, read it second.** It is the
+state of the work in flight — what is half-done, what was learned the hard
+way, and what comes next. It is deleted once its tasks land.
+
 ---
 
 ## What you are working on, in one paragraph
