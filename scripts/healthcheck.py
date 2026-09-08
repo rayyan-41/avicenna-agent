@@ -851,7 +851,7 @@ def probe_routing(vault_path: Path) -> ProbeResult:
 async def probe_embedding() -> ProbeResult:
     """Report the configured embedding provider, model, dimensions, and whether
     a live one-token embed succeeds.  SKIP when no embedding provider is
-    configured — a vault that does no linking is legitimate.  Never print key
+    configured — a vault without embeddings is legitimate.  Never print key
     material; use the sha256 fingerprints KeyPool already provides."""
     from avicenna.config import Config
     from avicenna.keypool import load_pool

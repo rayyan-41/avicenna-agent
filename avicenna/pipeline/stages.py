@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from avicenna.events import (
-    LinkCandidatesFound, LogMessage, ManifestWritten, MarkdownNormalised,
+    LogMessage, ManifestWritten, MarkdownNormalised,
     MocUpdated, NoteWritten, PreflightDeclared, SchemaDetected, Stage,
     TagsProposed, TagsValidated, ThemeMinted, WordCountChecked,
 )
@@ -124,8 +124,8 @@ def _write_note_atomically(dest: Path, text: str) -> None:
 
 
 # --- frontmatter ------------------------------------------------------------
-# The pipeline owns the frontmatter, not the model. Tagging, formatting and
-# linking each hand back prose; only this module writes to the vault. Earlier
+# The pipeline owns the frontmatter, not the model. Tagging and formatting
+# each hand back prose; only this module writes to the vault. Earlier
 # the tagger's tags lived in ctx.tags and never reached the file, and the
 # weaver was asked to emit a literal `tags: [PLACEHOLDER]` that nothing ever
 # substituted — so every note shipped orphaned and unsearchable.
@@ -519,8 +519,8 @@ async def _write_back(ctx: RunContext, stage: str, produced: str) -> bool:
         ref_body = current.strip()
 
     # --- normalise structural damage ------------------------------------------
-    # The formatter, tagger and linker push whole-note model output through
-    # this function.  Models over-eagerly produce horizontal rules and break
+    # The formatter and tagger push whole-note model output through this
+    # function.  Models over-eagerly produce horizontal rules and break
     # heading spacing; the normaliser is idempotent and frontmatter-safe, so
     # it runs on every revision that passes through this funnel.  The guard
     # runs after normalisation so it validates the bytes that actually land on
@@ -862,6 +862,15 @@ class AssemblyStage(PipelineStage):
                 await ctx.emit(LogMessage, level="warning",
                                text=f"weaver failed ({detail}); using the unwoven assembly")
 
+        # --- resolve hallucinated wikilinks ----------------------------------
+        # A model writing transition prose can spontaneously produce [[links]]
+        # to notes that do not exist.  Resolve every [[target]] against the
+        # vault's note index; unresolvable links are unwrapped to plain text.
+        dest = _note_destination(ctx)
+        note_text = await _resolve_wikilinks(
+            note_text, ctx.spec.vault, dest, ctx,
+        )
+
         # --- normalise structural damage --------------------------------------
         # Models over-eagerly produce horizontal rules and break heading
         # spacing.  The normaliser collapses consecutive rules, removes rules
@@ -885,7 +894,6 @@ class AssemblyStage(PipelineStage):
         )
 
         # --- place it in the vault, not in _tmp ------------------------------
-        dest = _note_destination(ctx)
         _write_note_atomically(dest, note_text)
         ctx.note_path = dest
         ctx.total_words = len(note_text.split())
@@ -1027,16 +1035,13 @@ class TaggingStage(PipelineStage):
     #
     # 2. After three failures the pipeline continued with `tags: []`, which
     #    orphaned the note permanently: update_moc.ps1 skips notes with fewer
-    #    than 2 tags (the note never enters its MOC), and get_related_notes
-    #    returns 0 candidates (which is why the linker invented notes that do
-    #    not exist). Now a minimal valid array is constructed from the taxonomy
-    #    and passed through validate_tags like any other candidate.
+    #    than 2 tags (the note never enters its MOC). Now a minimal valid array
+    #    is constructed from the taxonomy and passed through validate_tags like
+    #    any other candidate.
     #
     # 3. Even the constructed array can fail if the taxonomy is malformed or
     #    validate_tags has a stricter rule. In that case we fall through to
-    #    today's empty-tags behaviour, but LinkingStage now refuses to ask a
-    #    model to weave links against 0 candidates — that was the direct cause
-    #    of the invented wikilinks.
+    #    today's empty-tags behaviour.
 
     name: Stage = "tagging"
     id = "tagging"
@@ -1391,14 +1396,12 @@ class FormatterStage(PipelineStage):
 
 
 # --- wikilink validation ----------------------------------------------------
-# The weaver's transition prose names the upcoming section; the linker then
-# wraps those names in [[ ]] as though they were notes.  The prompt says "Do
-# not invent notes that do not exist" and it was given a real candidate list.
-# Asking the model more firmly is not a fix.  Instead, after the linker returns
-# we resolve every [[target]] against the vault's note index: a link whose
-# target is not an existing note is unwrapped to its plain text.  A section
-# heading the weaver named is kept as prose; only the spurious brackets are
-# removed.
+# A model writing transition prose can spontaneously produce [[wikilinks]] —
+# trained on Obsidian content, it reaches for the syntax even when the prompt
+# does not ask for it.  Every [[target]] in the weaver's output is resolved
+# against the vault's note index: a link whose target is not an existing note
+# is unwrapped to its plain text.  The words stay; only the spurious brackets
+# are removed.
 
 _WIKILINK = re.compile(r"\[\[([^\]]+)\]\]")
 
@@ -1464,70 +1467,12 @@ async def _resolve_wikilinks(text: str, vault: Vault, note_path: Path, ctx: RunC
         sample = ", ".join(f"[[{d}]]" for d in dropped[:5])
         await ctx.emit(
             LogMessage, level="warning",
-            text=f"linker invented {len(dropped)} wikilink(s) to non-existent notes "
+            text=f"model produced {len(dropped)} wikilink(s) to non-existent notes "
                  f"(dropped {sample})",
         )
     await ctx.emit(LogMessage, level="info",
                    text=f"wikilink resolution: {resolved_count} resolved, {len(dropped)} dropped")
     return result
-
-
-class LinkingStage(PipelineStage):
-    # When get_related_notes yields 0 candidates, the linker was asked to weave
-    # links against an empty candidate list and invented notes that do not exist.
-    # Now we skip the model call entirely and warn the user.
-    #
-    # After the linker returns, every [[target]] is resolved against the vault's
-    # note index.  A link to a non-existent note is unwrapped to plain text so
-    # the weaver's prose is kept without the spurious brackets.  This is a
-    # guard, not the link-selection algorithm — the design for choosing targets
-    # is deferred.
-    name: Stage = "linking"
-    id = "linking"
-
-    async def should_run(self, ctx: RunContext) -> bool:
-        return "linker" in ctx.spec.vault.agents
-
-    async def run(self, ctx: RunContext) -> None:
-        assert ctx.note_path is not None
-        try:
-            result = await _invoke_optional(ctx, "get_related_notes",
-                NotePath=str(ctx.note_path), CoreTags=",".join(ctx.tags) if ctx.tags else "",
-                SupportingTags="", ExcludedMentions="", TopN=5, MinScore=0.5)
-            count = (
-                int(result.parsed.captures.get("count", 0))
-                if result is not None and result.parsed and result.parsed.ok
-                else 0
-            )
-            related = (result.stdout or "").strip() if result is not None else ""
-            await ctx.emit(LinkCandidatesFound, count=count, sample=())
-            if result is not None and count == 0:
-                await ctx.emit(
-                    LogMessage, level="warning",
-                    text="0 link candidates found; skipping linker to avoid invented wikilinks",
-                )
-                return
-            note = ctx.note_path.read_text(encoding="utf-8", errors="replace")
-            payload = (
-                f"Note path: {ctx.note_path}\n"
-                f"Related notes found: {count}\n"
-                f"{related}\n\n"
-                "Weave [[wikilinks]] to genuinely related notes into the prose. "
-                "Do not invent notes that do not exist. Keep the frontmatter and "
-                "every heading. Return only the complete note.\n\n"
-                f"{note}"
-            )
-            output = await delegate(ctx, "linker", payload)
-        except Exception as exc:
-            await ctx.emit(LogMessage, level="error", text=f"linking failed: {exc}")
-            return
-        # Resolve wikilinks against the vault's note index before writing.
-        # A link to a non-existent note is unwrapped to its plain text.
-        output = await _resolve_wikilinks(output, ctx.spec.vault, ctx.note_path, ctx)
-        # A linked note that never reaches disk is the orphan this program
-        # exists to prevent; the return value used to be thrown away entirely.
-        if await _write_back(ctx, "linker", output):
-            ctx.handoffs["linker"] = output
 
 
 class MocStage(PipelineStage):
@@ -1566,9 +1511,9 @@ class CleanupStage(PipelineStage):
 
     This used to happen inside AssemblyStage, the moment the note first hit
     disk. Four stages still ran after it, so a crash or a cancel anywhere in
-    tagging, formatting, linking or MOC left an untagged, unlinked note in the
-    vault with every chunk already deleted — unrecoverable, and `--resume` could
-    not help because its inputs were gone.
+    tagging, formatting or MOC left an untagged note in the vault with every
+    chunk already deleted — unrecoverable, and `--resume` could not help
+    because its inputs were gone.
     """
 
     name: Stage = "moc"
@@ -1642,7 +1587,6 @@ def build_stages() -> list[PipelineStage]:
         TaggingStage(),
         TagsWrittenStage(),
         FormatterStage(),
-        LinkingStage(),
         MocStage(),
         CleanupStage(),
     ]

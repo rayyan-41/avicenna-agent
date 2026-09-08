@@ -1016,10 +1016,6 @@ export class App {
         return;
       }
 
-      case 'LinkCandidatesFound':
-        this.write(`${num('count')} link candidates found`);
-        return;
-
       case 'MocUpdated':
         this.write(`MOC updated: ${str('result')}`);
         return;

@@ -33,8 +33,7 @@
 - **`spec_for_model()` is the only registry-to-provider path.** It excludes
   `PIPELINE_ONLY` tools. `cleanup_chunks` and `update_moc` are called directly
   by the pipeline and must never appear in a model's tool list.
-- **No model-callable tool can write to a note.** The linker returns the note
-  body; the stage writes it back through `_write_back`.
+- **No model-callable tool can write to a note.** Only the pipeline writes, through `_write_back`.
 - **Contracts gate the pipeline, never the model's opinion.** `ParsedContract`
   is the branch condition. If a stage's success cannot be decided by regex match
   against a contract token, that stage does not gate anything.

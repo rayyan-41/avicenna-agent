@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 Stage = Literal[
     "preflight", "manifest", "sections", "assembly",
-    "wordcount", "toc", "tagging", "linking", "moc", "write",
+    "wordcount", "toc", "tagging", "moc", "write",
 ]
 
 
@@ -136,12 +136,6 @@ class SchemaDetected(Event):
 
 
 @dataclass(frozen=True)
-class LinkCandidatesFound(Event):
-    count: int = 0
-    sample: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
 class MocUpdated(Event):
     result: str = ""
     path: str = ""
@@ -185,6 +179,6 @@ __all__ = [
     "StageCompleted", "ToolInvoked", "ToolReturned", "WordCountChecked",
     "MarkdownNormalised",
     "TagsProposed", "TagsValidated", "SchemaDetected", "ThemeMinted",
-    "LinkCandidatesFound", "MocUpdated", "NoteWritten", "RunFailed",
+    "MocUpdated", "NoteWritten", "RunFailed",
     "RunComplete", "LogMessage",
 ]

@@ -11,6 +11,30 @@ see the correction below, which matters more than anything else in this file.
 
 ---
 
+## Decision: linker stage dropped (2026-09-08)
+
+The user was asked which of the three whole-note model round-trips (weaver,
+formatter, linker) should become deterministic, and chose: keep the weaver,
+drop the linker. The formatter was already replaced by deterministic Python on
+another branch.
+
+**Why:** The fidelity benchmark note had 0 external wikilinks. Interconnectivity
+in this vault is entity-driven through tags, not wikilink-driven. The linker was
+also the stage most prone to inventing notes that do not exist — `LinkingStage`
+already carried a comment about it, and `_resolve_wikilinks` existed purely to
+unwrap the links it hallucinated.
+
+**What was removed:** `LinkingStage` class, `LinkCandidatesFound` event, the
+`"linking"` stage literal, and all test coverage for the linker stage.
+
+**What was kept:** `_resolve_wikilinks` and `_build_vault_notes_index` remain as
+a guard on weaver output — a model writing transition prose can spontaneously
+produce `[[wikilinks]]` to non-existent notes. The resolver strips unresolvable
+links to plain text. The `get_related_notes` vault tool contract and
+registration remain since they are still valid vault infrastructure.
+
+---
+
 ## Where things stand
 
 | | |
@@ -90,11 +114,11 @@ through `mistralai`, because `_map_error` branches on `httpx.TimeoutException`.
 runs at **two** call sites, and the second one is the point:
 
 - `AssemblyStage`, which writes through `_write_note_atomically`.
-- `_write_back`, which is where `FormatterStage` and `LinkingStage` push
+- `_write_back`, which is where `FormatterStage` pushes
   whole-note model output **after** assembly. Wiring assembly alone would have
-  left the note normalised and then overwritten twice by un-normalised model
+  left the note normalised and then overwritten by un-normalised model
   output. The formatter is by function the stage most likely to reintroduce
-  exactly the damage the normaliser repairs, and it runs last but one.
+  exactly the damage the normaliser repairs.
 
 Inside `_write_back` the normaliser runs after frontmatter reconciliation and
 before the truncation guard, so the guard validates the bytes that land on disk,
@@ -132,8 +156,8 @@ entity-driven through tags, not wikilink-driven.** Do not chase link counts.
 
 Work in scope:
 
-- Make assembly deterministic. The run still does **three** whole-note model
-  round-trips — weaver, formatter, linker — which are the slowest and buggiest
+- Make assembly deterministic. The run still does **two** whole-note model
+  round-trips — weaver and formatter — which are the slowest and buggiest
   part of it. A comparable project the user showed does assembly in pure
   Python; its assembler imports no LLM client at all.
 - Numbered `###` headings; a Python-generated TOC callout with exactly-matching
@@ -203,10 +227,11 @@ before writing it down, and mark inference as inference.
   `taxonomy.json`.
 - **`_canonical_domain_dir` returns `Path | None`** and never fabricates a
   directory.
-- **Tool-absent is not the same as zero results.** In `LinkingStage` the
-  `result is not None` check is load-bearing: a vault with no
-  `get_related_notes` tool is legitimate and must degrade gracefully *and say
-  so*.
+- **Tool-absent is not the same as zero results.** Every vault tool call in a
+  stage must degrade gracefully *and say so* when the tool is absent — a vault
+  with zero PowerShell tools is legitimate. The `result is not None` pattern
+  that was load-bearing in the now-removed `LinkingStage` generalises to all
+  optional tool calls.
 
 ---
 

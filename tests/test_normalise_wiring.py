@@ -6,8 +6,8 @@ The normaliser (avicenna.pipeline.normalise) is called in two places:
      _write_note_atomically — so every first-run note carries clean
      structure.
   2. _write_back(), after frontmatter reconciliation and before the
-     truncation guard — so every model-produced revision (formatter,
-     linker) is normalised before it reaches the vault.
+     truncation guard — so every model-produced revision (formatter)
+     is normalised before it reaches the vault.
 
 These tests verify that:
 
@@ -22,6 +22,7 @@ These tests verify that:
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -89,9 +90,6 @@ def _messy_weaver_script(system: str, messages: list[Any]) -> Completion:
         return Completion(text=_declaration())
     if "TAGS:" in prompt:
         return Completion(text="Reviewed the note.\nTAGS: philosophy, epistemology, revelation")
-    if "genuinely related" in prompt:
-        note = prompt.split("\n\n", 1)[-1]
-        return Completion(text=note)
     if "formatting corrected" in prompt:
         return Completion(text=prompt.split("\n\n", 1)[-1])
     # The weaver: inject rules between every heading.
@@ -109,6 +107,15 @@ def _messy_weaver_script(system: str, messages: list[Any]) -> Completion:
     return Completion(text=BODY.strip())
 
 
+#: Section headings are ``## Title`` in weaver output and ``### N. Title`` once
+#: the structure pass has numbered them.  Assertions about the *final* note
+#: must therefore not pin "## " — doing so made two of the checks below pass
+#: vacuously the moment numbering landed, asserting nothing at all about a note
+#: whose rules-next-to-headings they exist to catch.
+def _is_heading(stripped: str) -> bool:
+    return bool(re.match(r"^#{2,6}\s", stripped))
+
+
 def _clean_script(system: str, messages: list[Any]) -> Completion:
     """Standard script — well-formed output, normaliser has nothing to fix."""
     prompt = messages[-1].content if messages else ""
@@ -116,9 +123,6 @@ def _clean_script(system: str, messages: list[Any]) -> Completion:
         return Completion(text=_declaration())
     if "TAGS:" in prompt:
         return Completion(text="Reviewed the note.\nTAGS: philosophy, epistemology, revelation")
-    if "genuinely related" in prompt:
-        note = prompt.split("\n\n", 1)[-1]
-        return Completion(text=note)
     if "formatting corrected" in prompt:
         return Completion(text=prompt.split("\n\n", 1)[-1])
     if "Assemble this into one continuous note" in prompt:
@@ -201,16 +205,16 @@ async def test_written_note_has_no_adjacent_rules_to_headings(tmp_path: Path) ->
             # Check neighbour above
             if i > 0:
                 prev = lines[i - 1].strip()
-                if prev.startswith("## ") or prev == "":
+                if _is_heading(prev) or prev == "":
                     # blank line before is fine; heading directly before is not
-                    if i > 1 and lines[i - 1].strip() == "" and lines[i - 2].strip().startswith("## "):
+                    if i > 1 and lines[i - 1].strip() == "" and _is_heading(lines[i - 2].strip()):
                         pass  # blank line between heading and rule is OK
-                    elif prev.startswith("## "):
+                    elif _is_heading(prev):
                         assert False, f"rule on line {i+1} directly after heading on line {i}"
             # Check neighbour below
             if i < len(lines) - 1:
                 nxt = lines[i + 1].strip()
-                if nxt.startswith("## "):
+                if _is_heading(nxt):
                     assert False, f"rule on line {i+1} directly before heading on line {i+2}"
 
 
@@ -307,7 +311,7 @@ async def test_formatter_reintroducing_rules_gets_normalised(tmp_path: Path) -> 
     for i, line in enumerate(lines):
         stripped = line.strip()
         if stripped == "---":
-            if i > 0 and lines[i - 1].strip().startswith("## "):
+            if i > 0 and _is_heading(lines[i - 1].strip()):
                 assert False, f"rule on line {i+1} directly after heading on line {i}"
-            if i < len(lines) - 1 and lines[i + 1].strip().startswith("## "):
+            if i < len(lines) - 1 and _is_heading(lines[i + 1].strip()):
                 assert False, f"rule on line {i+1} directly before heading on line {i+2}"

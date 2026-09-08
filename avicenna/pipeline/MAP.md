@@ -29,7 +29,7 @@
 | `schema.py` | 230 | Frontmatter schema detection. Samples existing vault notes to discover the key set and key order the vault uses, then returns a `FrontmatterSchema` the pipeline writes faithfully. Caches per run on `RunContext.frontmatter_schema`. Emits `SchemaDetected` so the user can see what the harness thinks their convention is. |
 | `sections.py` | 130 | Parallel section fan-out. Builds one closure per heading through `gather_sections`. Each task calls `one_shot()` for fresh context, retries once on exception or empty output, and Python (never the model) writes `_tmp/[slug]_chunk_NN.md`. |
 | `stage.py` | 89 | `PipelineStage` ABC and `PipelineRunner`. Defines the two-identifier contract: `name` (shared, user-facing label) and `id` (unique; timings, completion records and the dry-run filter key on it). The runner owns `StageEntered`/`StageCompleted` emission and translates `PipelineAbort` and `CancelledError` into `RunFailed`. |
-| `stages.py` | 1636 | All stage implementations plus `build_stages()`. Contains the write-back guard (`_write_back`), the frontmatter pipeline, the atomic note writer, and every vault-tool call with its graceful-degradation fallback. The bulk of pipeline logic lives here. |
+| `stages.py` | 1598 | All 13 stage implementations plus `build_stages()`. Contains the write-back guard (`_write_back`), the frontmatter pipeline, the atomic note writer, wikilink resolution for weaver output, and every vault-tool call with its graceful-degradation fallback. The bulk of pipeline logic lives here. |
 | `structure.py` | 376 | Deterministic note structure: numbered headings, TOC generation, heading cleanup. Replaces the formatter model round-trip and the PowerShell TOC tool with pure Python. No LLM client imported. |
 | `toolcall.py` | 27 | Thin wrapper that emits `ToolInvoked`/`ToolReturned` around every vault tool call. The pipeline never invokes a tool directly; it goes through here so the event bus sees it. |
 <!-- map:files:end -->
@@ -39,7 +39,7 @@
 - A stage has **two identifiers**. `name` is the `Stage` literal on the wire; multiple stages may share it (resume, routing, and pre-flight all carry `"preflight"`). `id` is unique and is the key for timings, completion records and the dry-run filter. When adding a stage, give it its own `id`.
 - **Contract tokens gate the pipeline, never the model's narration.** Vault tools return tokens like `MANIFEST_WRITTEN`, `ALL_PRESENT`, `WORDCOUNT_FAIL`, `PASS`. The stage regex-matches against those tokens. A model saying "that worked" is not evidence.
 - **Every vault tool call degrades gracefully and says so.** A vault may ship zero PowerShell tools. When a tool is absent the stage falls back to Python or skips, and emits a `LogMessage` warning — never silent degradation.
-- **Only the pipeline writes to a note.** `_write_back` guards every post-assembly revision (formatting, linking). It rejects output that drops below 75% of the current note on disk, so a model that truncates or answers conversationally cannot overwrite a finished note.
+- **Only the pipeline writes to a note.** `_write_back` guards every post-assembly revision (formatting). It rejects output that drops below 75% of the current note on disk, so a model that truncates or answers conversationally cannot overwrite a finished note.
 - **Sections get fresh context, always.** Each heading runs through `one_shot()` with no accumulated history. The session transcript is a log, not a conversation. Never share a session across headings — quality degrades monotonically after ~3 sections.
 - **Chunks are written atomically** (`.part` sibling plus `os.replace`) so resume can trust them. A surviving `.part` file means the write was interrupted and the chunk is discarded.
 - **`_tmp/` is not cleaned until `CleanupStage`,** the last stage. Deleting chunks earlier made a crash between assembly and cleanup permanently unrecoverable because the resume inputs would be gone.
@@ -49,10 +49,10 @@
 ```
 resume → routing → preflight → manifest → sections → assembly
 → wordcount → toc → tagging → tags_written → formatting
-→ linking → moc → cleanup
+→ moc → cleanup
 ```
 
-IDs in order: `resume`, `routing`, `preflight`, `manifest`, `sections`, `assembly`, `wordcount`, `toc`, `tagging`, `tags_written`, `formatting`, `linking`, `moc`, `cleanup`.
+IDs in order: `resume`, `routing`, `preflight`, `manifest`, `sections`, `assembly`, `wordcount`, `toc`, `tagging`, `tags_written`, `formatting`, `moc`, `cleanup`.
 
 Resume runs first so it can recover domain, slug and headings; routing then honours the recovered domain instead of re-deciding. Tags-written is a separate stage from tagging because the tagger proposes tags to the validator but only `TagsWrittenStage` puts them into the note's frontmatter.
 

@@ -53,7 +53,6 @@ export type EventName =
   | 'TagsValidated'
   | 'SchemaDetected'
   | 'ThemeMinted'
-  | 'LinkCandidatesFound'
   | 'MocUpdated'
   | 'NoteWritten'
   | 'RunFailed'
@@ -68,7 +67,6 @@ export const STAGES = [
   'wordcount',
   'toc',
   'tagging',
-  'linking',
   'moc',
   'write',
 ] as const;
