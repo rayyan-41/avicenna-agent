@@ -14,6 +14,7 @@ in a TOC.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -356,9 +357,17 @@ async def test_e2e_formed_sections_clean_headings(tmp_path: Path) -> None:
     for h in headings:
         assert not h.startswith("["), f"form marker leaked into heading: {h!r}"
 
-    # The note on disk must have clean headings too.
+    # The note on disk must have clean headings too.  The assertion is
+    # deliberately agnostic about heading level and numbering: the structure
+    # pass owns those (it emits "### 2. Comparative Matrix"), and this test is
+    # about the form marker not leaking, not about how headings are rendered.
+    # Pinning the literal "## " here made this test fail the moment numbering
+    # landed, on a note whose headings were in fact correct.
     body = _note(vault).read_text(encoding="utf-8")
-    assert "## Comparative Matrix" in body
-    assert "## The Architecture of Revelation" in body
+    note_headings = [m.group(1).strip() for m in re.finditer(r"^#{2,6}\s+(.*)$", body, re.M)]
+    assert any(h.endswith("Comparative Matrix") for h in note_headings), note_headings
+    assert any(h.endswith("The Architecture of Revelation") for h in note_headings), note_headings
+    for h in note_headings:
+        assert "[" not in h, f"form marker leaked into a note heading: {h!r}"
     assert "[Table]" not in body.split("---", 2)[-1]
     assert "[Mermaid Diagram]" not in body.split("---", 2)[-1]
