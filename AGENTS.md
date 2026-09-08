@@ -112,7 +112,8 @@ note in which the last heading was as substantial as the first.
 subprocess without the subprocess — one prompt, one completion, a context that
 has never seen another section. `SPAWN_SECTION` is the runtime name for it, and
 `DELEGATE @agent` is the same call with an agent's body as the system prompt.
-Sections now run in parallel under bounded concurrency (default 3) instead of
+Sections now run in parallel under bounded concurrency (default 6, resolvable
+through vault config, env var, or CLI flag) instead of
 sequentially in separate shells, but the isolation is identical and deliberate.
 
 **Three levels, and context crosses none of them:**

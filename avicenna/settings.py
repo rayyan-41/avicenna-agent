@@ -1,4 +1,4 @@
-"""Minimal settings resolver for the two T36 settings.
+"""Minimal settings resolver for the three T36 settings.
 
 Precedence chain (highest wins):
   1. CLI flag  (overrides dict)
@@ -6,18 +6,20 @@ Precedence chain (highest wins):
   3. Scope file  (vault .agents/config.json)
   4. Built-in default
 
-This is the slice of the layered-configuration design that words_per_heading
-and provider_timeout need.  The full design (REGISTRY, Layer enum, config
-show/get/set) is on the unexecuted plan and should not be built here.
+This is the slice of the layered-configuration design that words_per_heading,
+provider_timeout and max_concurrency need.  The full design (REGISTRY, Layer
+enum, config show/get/set) is on the unexecuted plan and should not be built
+here.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import sys
 from pathlib import Path
 from typing import Any
+
+from avicenna.config import warn
 
 
 # ---------------------------------------------------------------------------
@@ -54,7 +56,7 @@ def load_vault_config(vault_root: Path | None) -> dict[str, Any]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as exc:
-        print(f"WARNING: could not parse {path}: {exc}", file=sys.stderr)
+        warn(f"could not parse {path}: {exc}")
         return {}
     return data if isinstance(data, dict) else {}
 
@@ -161,18 +163,10 @@ def resolve_timeout(
 def _clamp_concurrency(value: int) -> int:
     """Clamp to [MAX_CONCURRENCY_MIN, MAX_CONCURRENCY_MAX], logging when clamped."""
     if value < MAX_CONCURRENCY_MIN:
-        print(
-            f"WARNING: concurrency {value} below minimum {MAX_CONCURRENCY_MIN}, "
-            f"clamping to {MAX_CONCURRENCY_MIN}",
-            file=sys.stderr,
-        )
+        warn(f"concurrency {value} below minimum {MAX_CONCURRENCY_MIN}, clamping")
         return MAX_CONCURRENCY_MIN
     if value > MAX_CONCURRENCY_MAX:
-        print(
-            f"WARNING: concurrency {value} above maximum {MAX_CONCURRENCY_MAX}, "
-            f"clamping to {MAX_CONCURRENCY_MAX}",
-            file=sys.stderr,
-        )
+        warn(f"concurrency {value} above maximum {MAX_CONCURRENCY_MAX}, clamping")
         return MAX_CONCURRENCY_MAX
     return value
 
