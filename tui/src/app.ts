@@ -985,7 +985,7 @@ export class App {
 
       case 'MarkdownNormalised':
         this.write(
-          `normalised: ${num('rules_removed')} rules removed, ` +
+          `normalised (${str('stage')}): ${num('rules_removed')} rules removed, ` +
             `${num('words_before')}w -> ${num('words_after')}w`,
         );
         return;

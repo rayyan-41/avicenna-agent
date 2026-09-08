@@ -108,6 +108,7 @@ class WordCountChecked(Event):
 
 @dataclass(frozen=True)
 class MarkdownNormalised(Event):
+    stage: str = ""
     rules_removed: int = 0
     consecutive_rules_collapsed: int = 0
     adjacent_rules_removed: int = 0

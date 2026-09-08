@@ -1,12 +1,22 @@
-"""Tests for the normaliser wiring in AssemblyStage.
+"""Tests for the normaliser wiring in AssemblyStage and _write_back.
 
-The normaliser (avicenna.pipeline.normalise) is called after the weaver
-round-trip and before the note reaches the vault.  These tests verify that:
+The normaliser (avicenna.pipeline.normalise) is called in two places:
 
-  1. The assembly stage emits a MarkdownNormalised event.
+  1. AssemblyStage.run(), after the weaver round-trip and before
+     _write_note_atomically — so every first-run note carries clean
+     structure.
+  2. _write_back(), after frontmatter reconciliation and before the
+     truncation guard — so every model-produced revision (formatter,
+     linker) is normalised before it reaches the vault.
+
+These tests verify that:
+
+  1. The assembly stage emits a MarkdownNormalised event with stage="assembly".
   2. The written note is normalised (rules collapsed, blank lines capped).
   3. The frontmatter block is preserved byte-identically through normalisation.
   4. The word count before and after normalisation are materially equal.
+  5. A formatter round-trip that reintroduces rules ends with a normalised
+     note on disk (the _write_back call site).
 """
 
 from __future__ import annotations
@@ -246,3 +256,76 @@ async def test_word_count_not_materially_changed(tmp_path: Path) -> None:
             f"normalisation changed word count by {ratio:.1%}: "
             f"{ev.words_before} -> {ev.words_after}"
         )
+
+
+# =============================================================================
+# 5. Stage field
+# =============================================================================
+
+
+async def test_assembly_event_has_stage_field(tmp_path: Path) -> None:
+    """The MarkdownNormalised event from assembly carries stage='assembly'."""
+    vault = _scaffold(tmp_path, agents=("tagger",))
+    events = await _run(vault)
+    norm_events = [e for e in events if isinstance(e, MarkdownNormalised)]
+    assert len(norm_events) >= 1
+    assert norm_events[0].stage == "assembly"
+
+
+# =============================================================================
+# 6. Formatter round-trip (_write_back normalisation)
+# =============================================================================
+
+
+async def test_formatter_reintroducing_rules_gets_normalised(tmp_path: Path) -> None:
+    """When the formatter returns a note with rules adjacent to headings,
+    _write_back normalises them and the final note on disk is clean.
+
+    This is the test that would have caught the assembly-only wiring: the
+    formatter runs after assembly and writes through _write_back, so without
+    normalisation there the final note would carry the formatter's damage.
+    """
+    def messy_formatter_script(system: str, messages: list[Any]) -> Completion:
+        prompt = messages[-1].content if messages else ""
+        if "pre-flight plan" in prompt or "JSON fence" in prompt:
+            return Completion(text=_declaration())
+        if "TAGS:" in prompt:
+            return Completion(text="Reviewed.\nTAGS: philosophy, epistemology, revelation")
+        if "genuinely related" in prompt:
+            note = prompt.split("\n\n", 1)[-1]
+            return Completion(text=note)
+        if "Assemble this into one continuous note" in prompt:
+            return Completion(text=prompt.split("\n\nTopic:")[0])
+        # The formatter: inject rules adjacent to headings.
+        if "formatting corrected" in prompt:
+            raw = prompt.split("\n\n", 1)[-1]
+            lines = raw.split("\n")
+            out: list[str] = []
+            for line in lines:
+                out.append(line)
+                if line.startswith("## "):
+                    out.append("")
+                    out.append("---")
+            return Completion(text="\n".join(out))
+        return Completion(text=BODY.strip())
+
+    vault = _scaffold(tmp_path, agents=("tagger", "formatter"))
+    events = await _run(vault, script=messy_formatter_script)
+
+    # The formatter writes through _write_back, which should normalise.
+    norm_events = [e for e in events if isinstance(e, MarkdownNormalised)]
+    formatter_norms = [e for e in norm_events if e.stage == "formatter"]
+    assert len(formatter_norms) >= 1, (
+        "formatter revision must trigger normalisation in _write_back"
+    )
+
+    # The final note on disk must not have rules adjacent to headings.
+    body = _note(vault).read_text(encoding="utf-8")
+    lines = body.split("\n")
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped == "---":
+            if i > 0 and lines[i - 1].strip().startswith("## "):
+                assert False, f"rule on line {i+1} directly after heading on line {i}"
+            if i < len(lines) - 1 and lines[i + 1].strip().startswith("## "):
+                assert False, f"rule on line {i+1} directly before heading on line {i+2}"

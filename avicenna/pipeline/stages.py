@@ -523,6 +523,29 @@ async def _write_back(ctx: RunContext, stage: str, produced: str) -> bool:
         result_body = candidate
         ref_body = current.strip()
 
+    # --- normalise structural damage ------------------------------------------
+    # The formatter, tagger and linker push whole-note model output through
+    # this function.  Models over-eagerly produce horizontal rules and break
+    # heading spacing; the normaliser is idempotent and frontmatter-safe, so
+    # it runs on every revision that passes through this funnel.  The
+    # truncation guard below measures the NORMALISED body, so a cleanup that
+    # shortens the note by a few rule lines does not count against the 25%
+    # budget.
+    words_before_norm = len(result_text.split())
+    norm = normalise_markdown(result_text)
+    if norm.text != result_text:
+        result_text = norm.text
+        result_body = (result_text[len(disk_fm):] if disk_fm else result_text).strip()
+        await ctx.emit(
+            MarkdownNormalised,
+            stage=stage,
+            rules_removed=norm.rules_removed,
+            consecutive_rules_collapsed=norm.consecutive_rules_collapsed,
+            adjacent_rules_removed=norm.adjacent_rules_removed,
+            words_before=words_before_norm,
+            words_after=len(result_text.split()),
+        )
+
     # --- truncation check on BODY lengths ------------------------------------
     if len(result_body) < len(ref_body) * 0.75:
         await ctx.emit(
@@ -849,6 +872,7 @@ class AssemblyStage(PipelineStage):
         note_text = norm.text
         await ctx.emit(
             MarkdownNormalised,
+            stage="assembly",
             rules_removed=norm.rules_removed,
             consecutive_rules_collapsed=norm.consecutive_rules_collapsed,
             adjacent_rules_removed=norm.adjacent_rules_removed,
