@@ -29,7 +29,8 @@
 | `schema.py` | 230 | Frontmatter schema detection. Samples existing vault notes to discover the key set and key order the vault uses, then returns a `FrontmatterSchema` the pipeline writes faithfully. Caches per run on `RunContext.frontmatter_schema`. Emits `SchemaDetected` so the user can see what the harness thinks their convention is. |
 | `sections.py` | 130 | Parallel section fan-out. Builds one closure per heading through `gather_sections`. Each task calls `one_shot()` for fresh context, retries once on exception or empty output, and Python (never the model) writes `_tmp/[slug]_chunk_NN.md`. |
 | `stage.py` | 89 | `PipelineStage` ABC and `PipelineRunner`. Defines the two-identifier contract: `name` (shared, user-facing label) and `id` (unique; timings, completion records and the dry-run filter key on it). The runner owns `StageEntered`/`StageCompleted` emission and translates `PipelineAbort` and `CancelledError` into `RunFailed`. |
-| `stages.py` | 1598 | All 14 stage implementations plus `build_stages()`. Contains the write-back guard (`_write_back`), the frontmatter pipeline, the atomic note writer, and every vault-tool call with its graceful-degradation fallback. The bulk of pipeline logic lives here. |
+| `stages.py` | 1636 | All stage implementations plus `build_stages()`. Contains the write-back guard (`_write_back`), the frontmatter pipeline, the atomic note writer, and every vault-tool call with its graceful-degradation fallback. The bulk of pipeline logic lives here. |
+| `structure.py` | 376 | Deterministic note structure: numbered headings, TOC generation, heading cleanup. Replaces the formatter model round-trip and the PowerShell TOC tool with pure Python. No LLM client imported. |
 | `toolcall.py` | 27 | Thin wrapper that emits `ToolInvoked`/`ToolReturned` around every vault tool call. The pipeline never invokes a tool directly; it goes through here so the event bus sees it. |
 <!-- map:files:end -->
 
