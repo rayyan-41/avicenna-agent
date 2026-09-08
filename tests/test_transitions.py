@@ -844,3 +844,65 @@ class TestRealProviderConstruction:
         assert _weaver_pool_name("gemini") == "google"
         assert _weaver_pool_name("mistral") == "mistral"
         assert _weaver_pool_name("anthropic") == "anthropic"
+
+
+class TestFencedCodeBlocks:
+    """A `## ` inside a fenced block is sample text, not a section.
+
+    This program writes long notes, sometimes about writing, so a fenced block
+    quoting Markdown is not exotic.  Both passes counted such a line as a
+    section: the reader numbered transitions against the wrong section list,
+    and the writer spliced a transition *inside the code block*.  Every other
+    pass over a note here is fence-aware; these two were not.
+    """
+
+    NOTE = (
+        "# T\n\n"
+        "## Real Section\n\nBody text here.\n\n"
+        "```markdown\n## Not A Section\n```\n\n"
+        "More body.\n\n"
+        "## Second Real\n\nBody.\n"
+    )
+
+    def test_reader_skips_headings_inside_a_fence(self) -> None:
+        skeleton = extract_skeleton(self.NOTE, "T")
+        assert [s.heading for s in skeleton.sections] == ["Real Section", "Second Real"]
+
+    def test_writer_does_not_splice_into_a_fence(self) -> None:
+        out = splice_transitions(
+            self.NOTE,
+            {1: "Transition one about T.", 2: "Transition two about T."},
+        )
+        assert "```markdown\n## Not A Section\n```" in out
+        # The second transition belongs to the second real section.
+        assert "## Second Real\n\nTransition two about T." in out
+
+    def test_the_fenced_block_is_byte_identical(self) -> None:
+        out = splice_transitions(self.NOTE, {1: "Transition one about T."})
+        fence = "```markdown\n## Not A Section\n```"
+        assert out.count(fence) == 1
+
+    def test_a_tilde_fence_is_closed_only_by_a_tilde_fence(self) -> None:
+        """Markdown's rule: a fence ends on its own character, not any fence."""
+        note = (
+            "# T\n\n"
+            "## One\n\n~~~\n```\n## Still Inside\n```\n~~~\n\nBody.\n\n"
+            "## Two\n\nBody.\n"
+        )
+        assert [s.heading for s in extract_skeleton(note, "T").sections] == ["One", "Two"]
+
+    def test_indices_agree_between_reader_and_writer(self) -> None:
+        """The bug that mattered: the two passes disagreeing on what section 2 is.
+
+        The reader numbers the transitions; the writer places them.  If they
+        count sections differently, every transition after the fence lands
+        against the wrong heading.
+        """
+        skeleton = extract_skeleton(self.NOTE, "T")
+        transitions = {
+            i + 1: f"A transition concerning {s.heading}."
+            for i, s in enumerate(skeleton.sections)
+        }
+        out = splice_transitions(self.NOTE, transitions)
+        for section in skeleton.sections:
+            assert f"## {section.heading}\n\nA transition concerning {section.heading}." in out

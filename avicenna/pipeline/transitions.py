@@ -85,6 +85,41 @@ class NoteSkeleton:
     sections: list[SectionSkeleton]
 
 
+# ---------------------------------------------------------------------------
+# Fenced code blocks
+# ---------------------------------------------------------------------------
+# A `## ` inside a fenced block is sample text, not a section.  Without this,
+# a note whose body quotes Markdown -- and this program writes notes about
+# writing -- had its fenced example counted as a section, which shifted every
+# later section's index by one and spliced a transition *inside the code
+# block*.  Every other pass over a note in this codebase is fence-aware
+# (structure.apply_structure, normalise_markdown); this one was not.
+
+_FENCE_LINE = re.compile(r"^\s*(`{3,}|~{3,})")
+
+
+def _section_heading_lines(lines: Sequence[str]) -> list[int]:
+    """Indices of the lines that open a section, skipping fenced regions.
+
+    A fence is closed only by a fence of the same character, so a tilde fence
+    containing a backtick fence stays open, as Markdown requires.
+    """
+    out: list[int] = []
+    fence_char = ""
+    for i, line in enumerate(lines):
+        m = _FENCE_LINE.match(line)
+        if m:
+            char = m.group(1)[0]
+            if not fence_char:
+                fence_char = char
+            elif char == fence_char:
+                fence_char = ""
+            continue
+        if not fence_char and line.startswith("## "):
+            out.append(i)
+    return out
+
+
 def extract_skeleton(note_text: str, topic: str) -> NoteSkeleton:
     """Build a skeleton from the assembled note.
 
@@ -102,20 +137,16 @@ def extract_skeleton(note_text: str, topic: str) -> NoteSkeleton:
     # Strip the top-level heading and any blank lines after it
     body = re.sub(r"^#[^#].*\n*", "", body, count=1)
 
-    # Split on ## headings
-    section_splits = re.split(r"(?=^## )", body, flags=re.MULTILINE)
+    # Split on ## headings, ignoring any that sit inside a fenced block.
+    lines = body.split("\n")
+    starts = _section_heading_lines(lines)
     sections: list[SectionSkeleton] = []
-    for chunk in section_splits:
-        chunk = chunk.strip()
-        if not chunk:
+    for n, start in enumerate(starts):
+        stop = starts[n + 1] if n + 1 < len(starts) else len(lines)
+        heading = lines[start][3:].strip()
+        if not heading:
             continue
-        # Extract the heading
-        heading_match = re.match(r"^## (.+)$", chunk, re.MULTILINE)
-        if not heading_match:
-            continue
-        heading = heading_match.group(1).strip()
-        # Everything after the heading is the body
-        section_body = chunk[heading_match.end():].strip()
+        section_body = "\n".join(lines[start + 1:stop]).strip()
         bookends: list[tuple[str, str]] = []
         for para in section_body.split("\n\n"):
             para = para.strip()
@@ -310,31 +341,29 @@ def splice_transitions(
     left unchanged.
     """
     lines = note_text.split("\n")
+    # Section starts are computed once, fence-aware, so the indices here agree
+    # with the ones extract_skeleton numbered the transitions against.  Walking
+    # the lines and matching `## ` inline (the previous approach) counted
+    # headings inside fenced code and spliced transitions into the code block.
+    starts = set(_section_heading_lines(lines))
     result: list[str] = []
     section_idx = 0
     i = 0
     while i < len(lines):
         line = lines[i]
         result.append(line)
-        # Detect a ## heading
-        if re.match(r"^## ", line):
+        if i in starts:
             section_idx += 1
             transition = transitions.get(section_idx)
             if transition is not None:
-                # Consume exactly one blank line after the heading (the
-                # assembly always emits one).  If there is no blank line,
-                # we insert the transition anyway — the normaliser will
-                # fix spacing later.
-                blank_consumed = False
+                # The assembly always emits one blank line after a heading;
+                # consume it so the splice does not add a second.  When it is
+                # absent, the blank written below still separates the
+                # transition from the body.
                 if i + 1 < len(lines) and lines[i + 1].strip() == "":
-                    i += 1  # skip the existing blank line
-                    blank_consumed = True
-                # Insert: blank line, transition, blank line
+                    i += 1
                 result.append("")
                 result.append(transition)
                 result.append("")
-                # If we did not consume a blank line above, the body
-                # continues on the next line.  The blank after the
-                # transition above provides the separator.
         i += 1
     return "\n".join(result)
