@@ -14,6 +14,7 @@ from avicenna.events import (
 )
 from avicenna.pipeline.normalise import normalise_markdown
 from avicenna.pipeline.schema import FrontmatterSchema, detect_frontmatter_schema
+from avicenna.pipeline.structure import apply_structure, generate_toc
 from avicenna.pipeline.context import RunContext
 from avicenna.pipeline.delegate import delegate
 from avicenna.pipeline.preflight import PreflightError, parse_preflight
@@ -945,15 +946,23 @@ class WordCountStage(PipelineStage):
 
 
 class TocStage(PipelineStage):
+    # Previously shelled out to a PowerShell generate_toc.ps1 vault tool.
+    # Replaced with a Python generator so a vault with zero PowerShell tools
+    # still gets a TOC.  The generate_toc function in structure.py is the
+    # single source of truth; FormatterStage's apply_structure call later
+    # regenerates the TOC with numbered anchors (idempotently — the old TOC
+    # is detected and replaced, not appended).
     name: Stage = "toc"
     id = "toc"
 
     async def run(self, ctx: RunContext) -> None:
         assert ctx.note_path is not None
-        if not ctx.spec.vault.tools.has("generate_toc"):
-            await _skip(ctx, "generate_toc", "note will have no table of contents")
+        note = ctx.note_path.read_text(encoding="utf-8", errors="replace")
+        updated = generate_toc(note)
+        if updated == note:
             return
-        await invoke_tool(ctx, "generate_toc", FilePath=str(ctx.note_path), MinHeadings=2)
+        _write_note_atomically(ctx.note_path, updated)
+        await ctx.emit(LogMessage, level="info", text="TOC generated")
 
 
 #: The tagger must mark its answer. Scanning for "a line containing a comma"
@@ -1361,30 +1370,32 @@ class TagsWrittenStage(PipelineStage):
 
 
 class FormatterStage(PipelineStage):
+    # Previously delegated the entire note to a "formatter" agent.  Replaced
+    # with deterministic Python (structure.apply_structure) which numbers
+    # headings, strips repeated headings, demotes stray top-level headings,
+    # and generates the TOC.  No model round-trip.  _write_back still runs
+    # for frontmatter reconciliation, normalisation and the truncation guard.
     name: Stage = "tagging"  # grouped with tagging in the user-facing label
     id = "formatting"
 
     async def should_run(self, ctx: RunContext) -> bool:
-        return "formatter" in ctx.spec.vault.agents
+        return ctx.note_path is not None
 
     async def run(self, ctx: RunContext) -> None:
         assert ctx.note_path is not None
         note = ctx.note_path.read_text(encoding="utf-8", errors="replace")
-        payload = (
-            f"Note path: {ctx.note_path}\n"
-            "Return the complete note with formatting corrected. Keep every "
-            "heading and the frontmatter block. Return only the note.\n\n"
-            f"{note}"
-        )
-        try:
-            output = await delegate(ctx, "formatter", payload)
-        except Exception as exc:
-            await ctx.emit(LogMessage, level="error", text=f"formatter failed: {exc}")
+        result = apply_structure(note)
+        if result.text == note:
             return
-        ctx.handoffs["formatter"] = output
-        # The formatter's revision is only useful if it reaches the file; it
-        # used to be stored in handoffs and discarded.
-        await _write_back(ctx, "formatter", output)
+        await ctx.emit(
+            LogMessage, level="info",
+            text=(
+                f"structure: {result.headings_numbered} headings numbered, "
+                f"{result.headings_stripped} repeated headings stripped, "
+                f"{result.stray_demoted} stray headings demoted"
+            ),
+        )
+        await _write_back(ctx, "formatting", result.text)
 
 
 # --- wikilink validation ----------------------------------------------------

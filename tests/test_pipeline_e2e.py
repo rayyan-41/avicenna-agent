@@ -124,8 +124,8 @@ async def test_scaffolded_vault_produces_a_structured_note(tmp_path: Path) -> No
 
     assert body.startswith("---\n"), "note must open with frontmatter"
     assert "tags:" in body.split("---")[1], "frontmatter must carry a tags line"
-    for heading in HEADINGS:
-        assert f"## {heading}" in body, f"missing heading: {heading}"
+    for i, heading in enumerate(HEADINGS, 1):
+        assert f"### {i}. {heading}" in body, f"missing numbered heading: {heading}"
     assert "CHUNK" not in body, "chunk scaffolding leaked into the delivered note"
     assert "PLACEHOLDER" not in body, "placeholder tags reached the note"
 
@@ -192,8 +192,8 @@ async def test_a_truncating_agent_cannot_clobber_the_note(tmp_path: Path) -> Non
 
     body = _note(vault).read_text(encoding="utf-8")
     assert "Sure! Here is your note." not in body
-    for heading in HEADINGS:
-        assert f"## {heading}" in body
+    for i, heading in enumerate(HEADINGS, 1):
+        assert f"### {i}. {heading}" in body
 
 
 # --- resume -----------------------------------------------------------------
@@ -238,7 +238,7 @@ async def test_resume_with_nothing_to_resume_starts_fresh(tmp_path: Path) -> Non
     vault = _scaffold(tmp_path)
     await _run(vault, resume=True, fresh=False)
     body = _note(vault).read_text(encoding="utf-8")
-    assert f"## {HEADINGS[0]}" in body
+    assert f"### 1. {HEADINGS[0]}" in body
 
 
 # --- guarantees -------------------------------------------------------------
@@ -268,7 +268,7 @@ async def test_every_missing_tool_is_announced(tmp_path: Path) -> None:
         e.text for e in events
         if isinstance(e, LogMessage) and "not available in this vault" in e.text
     ]
-    for tool in ("verify_chunks", "validate_wordcount", "generate_toc"):
+    for tool in ("verify_chunks", "validate_wordcount"):
         assert any(tool in w for w in warnings), f"{tool} degraded without saying so"
 
 
@@ -348,4 +348,4 @@ async def test_headings_with_commas_are_accepted(tmp_path: Path) -> None:
 
     # The heading must survive through the entire pipeline into the note body.
     body = _note(vault).read_text(encoding="utf-8")
-    assert "## Causes, Course and Consequences" in body
+    assert "### 1. Causes, Course and Consequences" in body
