@@ -21,7 +21,11 @@ from avicenna.pipeline.run import execute_run
 from avicenna.providers.base import Completion
 from avicenna.providers.fake import FakeProvider
 from avicenna.settings import (
+    MAX_CONCURRENCY_DEFAULT,
+    MAX_CONCURRENCY_MAX,
+    MAX_CONCURRENCY_MIN,
     WORDS_PER_HEADING_DEFAULT,
+    resolve_concurrency,
     resolve_timeout,
     resolve_words_per_heading,
 )
@@ -508,3 +512,96 @@ class TestNoTemplateMinimum:
         assert "floor" not in source.lower(), (
             "parse_preflight still references 'floor'"
         )
+
+
+# ============================================================================
+# Concurrency resolution
+# ============================================================================
+
+
+class TestConcurrencyResolution:
+    """resolve_concurrency follows the same precedence chain as every other
+    setting: CLI → env → vault config → default.  Values outside [MIN, MAX]
+    are clamped with a warning, never silently accepted."""
+
+    def test_default_is_max_concurrency_default(self) -> None:
+        """With no configuration anywhere, the default is MAX_CONCURRENCY_DEFAULT."""
+        result = resolve_concurrency()
+        assert result == MAX_CONCURRENCY_DEFAULT == 6
+
+    def test_vault_config_overrides_default(self) -> None:
+        vault_cfg: dict[str, Any] = {"max_concurrency": 8}
+        result = resolve_concurrency(vault_config=vault_cfg)
+        assert result == 8
+
+    def test_env_var_overrides_vault_config(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AVICENNA_CONCURRENCY", "10")
+        vault_cfg: dict[str, Any] = {"max_concurrency": 4}
+        result = resolve_concurrency(vault_config=vault_cfg)
+        assert result == 10
+
+    def test_cli_flag_overrides_env_var(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AVICENNA_CONCURRENCY", "10")
+        result = resolve_concurrency(overrides={"max_concurrency": 2})
+        assert result == 2
+
+    def test_cli_flag_overrides_vault_config(self) -> None:
+        vault_cfg: dict[str, Any] = {"max_concurrency": 4}
+        result = resolve_concurrency(
+            overrides={"max_concurrency": 12}, vault_config=vault_cfg,
+        )
+        assert result == 12
+
+    def test_zero_clamped_to_minimum(self, capsys: pytest.CaptureFixture[str]) -> None:
+        result = resolve_concurrency(overrides={"max_concurrency": 0})
+        assert result == MAX_CONCURRENCY_MIN == 1
+        captured = capsys.readouterr()
+        assert "clamping" in captured.err
+
+    def test_negative_clamped_to_minimum(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        result = resolve_concurrency(overrides={"max_concurrency": -5})
+        assert result == MAX_CONCURRENCY_MIN == 1
+        captured = capsys.readouterr()
+        assert "clamping" in captured.err
+
+    def test_above_max_clamped(self, capsys: pytest.CaptureFixture[str]) -> None:
+        result = resolve_concurrency(overrides={"max_concurrency": 100})
+        assert result == MAX_CONCURRENCY_MAX == 16
+        captured = capsys.readouterr()
+        assert "clamping" in captured.err
+
+    def test_junk_string_falls_through(self) -> None:
+        """A non-numeric env var is silently ignored, falling through to default."""
+        result = resolve_concurrency(overrides={"max_concurrency": "not-a-number"})
+        assert result == MAX_CONCURRENCY_DEFAULT
+
+    def test_junk_env_var_falls_through(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AVICENNA_CONCURRENCY", "abc")
+        result = resolve_concurrency()
+        assert result == MAX_CONCURRENCY_DEFAULT
+
+    def test_junk_vault_config_falls_through(self) -> None:
+        vault_cfg: dict[str, Any] = {"max_concurrency": "garbage"}
+        result = resolve_concurrency(vault_config=vault_cfg)
+        assert result == MAX_CONCURRENCY_DEFAULT
+
+    def test_valid_value_passes_through_unclamped(self) -> None:
+        """A value within bounds is returned unchanged."""
+        result = resolve_concurrency(overrides={"max_concurrency": 9})
+        assert result == 9
+
+    def test_at_boundary_min(self) -> None:
+        result = resolve_concurrency(overrides={"max_concurrency": MAX_CONCURRENCY_MIN})
+        assert result == MAX_CONCURRENCY_MIN
+
+    def test_at_boundary_max(self) -> None:
+        result = resolve_concurrency(overrides={"max_concurrency": MAX_CONCURRENCY_MAX})
+        assert result == MAX_CONCURRENCY_MAX

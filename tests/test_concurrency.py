@@ -7,6 +7,7 @@ import asyncio
 import pytest
 
 from avicenna.concurrency import gather_sections
+from avicenna.settings import MAX_CONCURRENCY_DEFAULT
 
 
 @pytest.mark.asyncio
@@ -25,6 +26,44 @@ async def test_concurrency_capped():
     results = await gather_sections([task] * 10, concurrency=3)
     assert peak <= 3
     assert all(r == 1 for r in results if not isinstance(r, BaseException))
+
+
+@pytest.mark.asyncio
+async def test_default_concurrency_matches_constant():
+    """The no-argument default must be MAX_CONCURRENCY_DEFAULT, not a stale literal."""
+    running = 0
+    peak = 0
+
+    async def task():
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        await asyncio.sleep(0.01)
+        running -= 1
+        return 1
+
+    results = await gather_sections([task] * 20)
+    assert peak <= MAX_CONCURRENCY_DEFAULT
+    assert len(results) == 20
+
+
+@pytest.mark.asyncio
+async def test_concurrency_of_one_runs_sequentially():
+    """With concurrency=1, tasks must not overlap."""
+    running = 0
+    peak = 0
+
+    async def task():
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        await asyncio.sleep(0.01)
+        running -= 1
+        return 1
+
+    results = await gather_sections([task] * 5, concurrency=1)
+    assert peak == 1
+    assert all(r == 1 for r in results)
 
 
 @pytest.mark.asyncio

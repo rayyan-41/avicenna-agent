@@ -337,15 +337,19 @@ class Bridge:
 
         async def _run() -> None:
             try:
+                overrides: dict[str, Any] = {}
+                raw_cc = params.get("concurrency")
+                if raw_cc is not None:
+                    overrides["max_concurrency"] = int(raw_cc)
                 await execute_run(
                     topic, provider, vault,
                     bus=self._bus,
                     run_id=run_id,
-                    concurrency=int(params.get("concurrency") or 3),
                     dry_run=bool(params.get("dryRun")),
                     resume=resume,
                     fresh=not resume,
                     domain_override=params.get("domain") or hint_domain,
+                    overrides=overrides,
                 )
             except asyncio.CancelledError:
                 raise

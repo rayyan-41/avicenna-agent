@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 from avicenna.bus import EventBus
@@ -13,6 +14,7 @@ from avicenna.pipeline.context import RunContext, RunSpec
 from avicenna.pipeline.stage import PipelineAbort, PipelineRunner
 from avicenna.pipeline.stages import build_stages
 from avicenna.providers.base import LLMProvider
+from avicenna.settings import load_vault_config, resolve_concurrency
 
 
 #: Stage identities that constitute a dry run: decide the agent, then declare
@@ -29,7 +31,7 @@ async def execute_run(
     *,
     bus: EventBus | None = None,
     run_id: str | None = None,
-    concurrency: int = 3,
+    concurrency: int | None = None,
     dry_run: bool = False,
     domain_override: str | None = None,
     template_override: str | None = None,
@@ -39,12 +41,23 @@ async def execute_run(
 ) -> None:
     rid = run_id or str(uuid.uuid4())[:8]
     bus = bus or EventBus()
+    # Concurrency flows through the same precedence chain as every other
+    # setting: explicit param (highest) → env → vault config → default.
+    # The explicit param is merged into overrides so resolve_concurrency
+    # sees one dict, matching how words_per_heading is handled in sections.py.
+    effective_overrides = dict(overrides or {})
+    if concurrency is not None:
+        effective_overrides.setdefault("max_concurrency", concurrency)
+    vault_cfg = load_vault_config(Path(vault.root) if vault else None)
+    resolved_concurrency = resolve_concurrency(
+        overrides=effective_overrides, vault_config=vault_cfg,
+    )
     spec = RunSpec(
         topic=topic, vault=vault, provider=provider, bus=bus,
-        run_id=rid, concurrency=concurrency, dry_run=dry_run,
+        run_id=rid, concurrency=resolved_concurrency, dry_run=dry_run,
         fresh=fresh, resume=resume, domain_override=domain_override,
         template_override=template_override,
-        overrides=overrides or {},
+        overrides=effective_overrides,
     )
     ctx = RunContext(spec=spec)
     await bus.emit(RunStarted(

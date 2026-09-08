@@ -15,6 +15,7 @@ from avicenna.bus import EventBus
 from avicenna.events import Event
 from avicenna.pipeline.schema import FrontmatterSchema
 from avicenna.providers.base import LLMProvider
+from avicenna.settings import MAX_CONCURRENCY_DEFAULT
 from avicenna.vault.registry import ThemeRegistry
 from avicenna.vault.vault import Vault
 from avicenna.vault.models import AgentDef
@@ -34,7 +35,7 @@ class RunSpec:
     provider: LLMProvider
     bus: EventBus
     run_id: str
-    concurrency: int = 3
+    concurrency: int = MAX_CONCURRENCY_DEFAULT
     dry_run: bool = False
     resume: bool = False
     fresh: bool = True

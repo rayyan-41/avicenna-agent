@@ -26,6 +26,14 @@ from typing import Any
 
 WORDS_PER_HEADING_DEFAULT: int = 1000
 
+# Every concurrent section is a live API call against a rate-limited provider.
+# Six matches the comparable project the user pointed at; the upper bound is
+# deliberately conservative — an unbounded value turns a config typo into a
+# 429 storm with no recovery path.
+MAX_CONCURRENCY_DEFAULT: int = 6
+MAX_CONCURRENCY_MIN: int = 1
+MAX_CONCURRENCY_MAX: int = 16
+
 
 # ---------------------------------------------------------------------------
 # File I/O
@@ -148,3 +156,67 @@ def resolve_timeout(
 
     # 4. Default
     return default
+
+
+def _clamp_concurrency(value: int) -> int:
+    """Clamp to [MAX_CONCURRENCY_MIN, MAX_CONCURRENCY_MAX], logging when clamped."""
+    if value < MAX_CONCURRENCY_MIN:
+        print(
+            f"WARNING: concurrency {value} below minimum {MAX_CONCURRENCY_MIN}, "
+            f"clamping to {MAX_CONCURRENCY_MIN}",
+            file=sys.stderr,
+        )
+        return MAX_CONCURRENCY_MIN
+    if value > MAX_CONCURRENCY_MAX:
+        print(
+            f"WARNING: concurrency {value} above maximum {MAX_CONCURRENCY_MAX}, "
+            f"clamping to {MAX_CONCURRENCY_MAX}",
+            file=sys.stderr,
+        )
+        return MAX_CONCURRENCY_MAX
+    return value
+
+
+def resolve_concurrency(
+    *,
+    overrides: dict[str, Any] | None = None,
+    vault_config: dict[str, Any] | None = None,
+) -> int:
+    """Resolve section concurrency through the precedence chain.
+
+    Precedence (highest wins):
+      1. CLI flag  (overrides dict)
+      2. Environment variable  ``AVICENNA_CONCURRENCY``
+      3. Vault config  ``max_concurrency``
+      4. Built-in default  ``MAX_CONCURRENCY_DEFAULT``
+
+    The resolved value is clamped to ``[MAX_CONCURRENCY_MIN, MAX_CONCURRENCY_MAX]``.
+    """
+    overrides = overrides or {}
+    vault_config = vault_config or {}
+
+    # 1. CLI flag
+    if "max_concurrency" in overrides:
+        try:
+            return _clamp_concurrency(int(overrides["max_concurrency"]))
+        except (ValueError, TypeError):
+            pass
+
+    # 2. Environment variable
+    env = os.environ.get("AVICENNA_CONCURRENCY")
+    if env is not None:
+        try:
+            return _clamp_concurrency(int(env))
+        except ValueError:
+            pass
+
+    # 3. Vault config
+    cfg_val = vault_config.get("max_concurrency")
+    if cfg_val is not None:
+        try:
+            return _clamp_concurrency(int(cfg_val))
+        except (ValueError, TypeError):
+            pass
+
+    # 4. Default
+    return MAX_CONCURRENCY_DEFAULT
