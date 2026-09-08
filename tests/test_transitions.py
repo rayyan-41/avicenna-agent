@@ -841,9 +841,29 @@ class TestRealProviderConstruction:
         """
         from avicenna.pipeline.stages import _weaver_pool_name
 
-        assert _weaver_pool_name("gemini") == "google"
-        assert _weaver_pool_name("mistral") == "mistral"
-        assert _weaver_pool_name("anthropic") == "anthropic"
+        no_weaver = {"mistral": ["k"], "google": ["k"]}
+        assert _weaver_pool_name("gemini", no_weaver) == "google"
+        assert _weaver_pool_name("mistral", no_weaver) == "mistral"
+        assert _weaver_pool_name("anthropic", no_weaver) == "anthropic"
+
+    def test_a_declared_weaver_section_wins(self) -> None:
+        """Weaving and generation should not spend the same keys.
+
+        Generation fires one request per heading at once; weaving is a single
+        request for the whole note.  A burst that trips a rate limit would
+        otherwise take the weaver down with it.
+        """
+        from avicenna.pipeline.stages import _weaver_pool_name
+
+        sections = {"weaver": ["k"], "google": ["k"], "mistral": ["k"]}
+        assert _weaver_pool_name("gemini", sections) == "weaver"
+        assert _weaver_pool_name("mistral", sections) == "weaver"
+
+    def test_an_empty_weaver_section_is_not_a_declaration(self) -> None:
+        """A header with no keys under it must not strand the weaver."""
+        from avicenna.pipeline.stages import _weaver_pool_name
+
+        assert _weaver_pool_name("gemini", {"weaver": [], "google": ["k"]}) == "google"
 
 
 class TestFencedCodeBlocks:

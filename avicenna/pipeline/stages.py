@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any
 
 from avicenna.events import (
@@ -926,18 +927,40 @@ class AssemblyStage(PipelineStage):
         return "\n".join(parts)
 
 
-def _weaver_pool_name(provider_name: str) -> str:
-    """Which key-pool section funds *provider_name*.
+#: The key-pool section reserved for the weaver, when the operator declares one.
+WEAVER_POOL_SECTION = "weaver"
 
-    Gemini's keys live under "google" -- the same section the embedding
-    provider draws from, because they are Google AI Studio keys.  Every other
-    provider spends from a section of its own name.
 
-    This existed inline as a hardcoded load_pool("google") that ignored the
+def _weaver_pool_name(
+    provider_name: str,
+    sections: Mapping[str, list[str]] | None = None,
+) -> str:
+    """Which key-pool section funds the weaver.
+
+    A ``[weaver]`` section wins when it exists, whatever provider is
+    configured.  Weaving and generation have opposite call shapes -- generation
+    fires one request per heading, all at once, while weaving is a single
+    request for the whole note -- so a burst of section work that trips a rate
+    limit would otherwise take the weaver down with it, on the same keys.
+    Separating them keeps one from starving the other, and lets an operator
+    give the weaver a key with different quota.
+
+    With no such section the weaver falls back to the provider's own keys.
+    Gemini's live under "google", the section the embedding provider also
+    draws from, because they are Google AI Studio keys; every other provider
+    spends from a section of its own name.
+
+    This was once a hardcoded ``load_pool("google")`` that ignored the
     configured provider entirely, so a vault naming a different weaver would
-    have been handed Google keys.  That is the conflation that once made a
-    valid Gemini key look expired: it was being offered to Mistral.
+    still have been handed Google keys -- the conflation that made a valid
+    Gemini key look expired by offering it to Mistral.
     """
+    if sections is None:
+        from avicenna.keypool import load_pool_file
+
+        sections = load_pool_file()
+    if sections.get(WEAVER_POOL_SECTION):
+        return WEAVER_POOL_SECTION
     return "google" if provider_name == "gemini" else provider_name
 
 
