@@ -91,10 +91,10 @@ class MistralProvider(LLMProvider):
         self._pool = pool
         # timeout_ms is the SDK's parameter name (int, milliseconds). We store
         # it as such so every client construction and per-call site can pass it
-        # directly without repeated conversion.  Default is 600s (10 min):
-        # generous enough that a legitimate 1,000-word section generation
-        # (~90-120s observed) never hits it, tight enough that a truly hung
-        # call does not stall the pipeline for 8,703 seconds as it did once.
+        # directly without repeated conversion.  Default is 600s (10 min).
+        # The budget's job is to bound a hung call, not a slow one: a section
+        # generating ~1,000 words must never hit it, while a call that has
+        # genuinely hung should be killed in minutes rather than hours.
         self._timeout_ms: int = int(timeout * 1000)
         # Lazily-built clients, keyed by the API key string. When pooled, each
         # key gets its own client so we never re-create one in a hot loop.

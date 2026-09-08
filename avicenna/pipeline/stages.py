@@ -803,14 +803,16 @@ class AssemblyStage(PipelineStage):
                 "will fill in the tags. Return only the note.\n"
             )
             # The deadline lives in the provider client (timeout_ms on the
-            # Mistral SDK), not in an asyncio.wait_for wrapper here.  That
-            # decision was deliberate: a harness-side deadline cancels the
-            # coroutine but does not cancel the underlying HTTP request, so the
-            # socket hangs until the OS gives up — which is how a single weaver
-            # call stalled for 8,703 seconds.  The provider-level timeout kills
-            # the request itself.  A provider timeout surfaces as a
-            # TransientError, which this except block catches and degrades from
-            # just like any other weaver failure.
+            # Mistral SDK), not in an asyncio.wait_for wrapper here.  An
+            # earlier version wrapped this call in wait_for, but the default
+            # was None — so in practice no deadline existed at any layer, and
+            # a hung call blocked for 2.4 hours.  Even when wait_for is
+            # configured, it abandons the coroutine but cannot abort the
+            # underlying HTTP request; the socket stays open until the OS
+            # gives up.  A provider-level timeout kills the request itself
+            # through httpx, which is why it belongs there.  A timeout
+            # surfaces as a TransientError, which this except block catches
+            # and degrades from just like any other weaver failure.
             try:
                 woven = await delegate(ctx, "weaver", note_text + "\n\n" + weaver_prompt)
                 if woven and woven.strip():
