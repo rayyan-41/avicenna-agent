@@ -2,9 +2,8 @@
 
 The normaliser (avicenna.pipeline.normalise) is called in two places:
 
-  1. AssemblyStage.run(), after the weaver round-trip and before
-     _write_note_atomically — so every first-run note carries clean
-     structure.
+  1. AssemblyStage.run(), after assembly and before _write_note_atomically
+     — so every first-run note carries clean structure.
   2. _write_back(), after frontmatter reconciliation and before the
      truncation guard — so every model-produced revision (formatter)
      is normalised before it reaches the vault.
@@ -173,18 +172,21 @@ async def test_assembly_emits_markdown_normalised(tmp_path: Path) -> None:
     assert isinstance(ev.words_after, int) and ev.words_after > 0
 
 
-async def test_messy_weaver_gets_normalised(tmp_path: Path) -> None:
-    """When the weaver returns excessive rules, the normaliser removes them
-    and the event reports nonzero counts."""
+async def test_assembly_normalises_even_with_weaver_present(tmp_path: Path) -> None:
+    """Assembly normalises the note regardless of whether a weaver agent is
+    present.  The weaver no longer runs during assembly (it was replaced by
+    TransitionStage), but the normaliser still runs so every first-run note
+    carries clean structure."""
     vault = _scaffold(tmp_path, agents=("tagger", "weaver"))
     events = await _run(vault, script=_messy_weaver_script)
     norm_events = [e for e in events if isinstance(e, MarkdownNormalised)]
     assembly_ev = [e for e in norm_events if e.stage == "assembly"]
     assert len(assembly_ev) == 1
+    # The weaver no longer modifies assembly output, so the assembled note
+    # (built from clean chunks) has no rules to remove.  The normaliser
+    # still runs — the event fires — but its counts are zero.
     ev = assembly_ev[0]
-    assert ev.rules_removed > 0, (
-        f"messy weaver should trigger rule removal, got {ev.rules_removed}"
-    )
+    assert ev.rules_removed == 0
 
 
 # =============================================================================

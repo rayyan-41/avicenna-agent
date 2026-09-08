@@ -43,6 +43,7 @@ async def execute_run(
     resume: bool = False,
     overrides: dict[str, Any] | None = None,
     on_plan: Callable[[PreflightDeclaration], Awaitable[bool]] | None = None,
+    weaver_provider: LLMProvider | None = None,
 ) -> None:
     rid = run_id or str(uuid.uuid4())[:8]
     bus = bus or EventBus()
@@ -63,6 +64,7 @@ async def execute_run(
         fresh=fresh, resume=resume, domain_override=domain_override,
         template_override=template_override,
         overrides=effective_overrides,
+        weaver_provider=weaver_provider,
     )
     ctx = RunContext(spec=spec, on_plan=on_plan)
     await bus.emit(RunStarted(

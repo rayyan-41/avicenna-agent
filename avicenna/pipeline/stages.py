@@ -11,7 +11,8 @@ from avicenna.events import (
     LogMessage, ManifestWritten, MarkdownNormalised,
     MocUpdated, NoteWritten, PlanApprovalRequested, PreflightDeclared,
     SchemaDetected, Stage,
-    TagsProposed, TagsValidated, ThemeMinted, WordCountChecked,
+    TagsProposed, TagsValidated, ThemeMinted, TransitionsApplied,
+    WordCountChecked,
 )
 from avicenna.pipeline.normalise import normalise_markdown
 from avicenna.pipeline.schema import FrontmatterSchema, detect_frontmatter_schema
@@ -853,37 +854,19 @@ class AssemblyStage(PipelineStage):
 
         # --- assemble --------------------------------------------------------
         note_text = self._assemble(ctx, expected)
-        if "weaver" in ctx.spec.vault.agents:
-            weaver_prompt = (
-                f"Topic: {ctx.spec.topic}\n"
-                f"Slug: {ctx.slug}\n"
-                f"Headings: {', '.join(ctx.headings)}\n"
-                "Assemble this into one continuous note. Keep every '## ' heading "
-                "exactly as written, add transitions between sections, and keep the "
-                "frontmatter block at the top unchanged — the pipeline owns it and "
-                "will fill in the tags. Return only the note.\n"
-            )
-            # The deadline lives in the provider client, not here.  The
-            # Mistral SDK applies a 300s per-call default (chat.py:379-383),
-            # and this codebase now makes that explicit and configurable
-            # (provider_timeout) while also bounding total wall time across
-            # retries (provider_budget).  An earlier version wrapped this
-            # call in asyncio.wait_for with a default of None — so no
-            # harness-side deadline was ever applied either.  Neither a
-            # per-call timeout alone nor a harness deadline alone bounds a
-            # retrying call: each retry restarts the per-call clock and
-            # the harness has no visibility into retry state.  The provider
-            # owns both, so the deadline belongs there.  A provider timeout
-            # surfaces as a TransientError, which this except block catches
-            # and degrades from just like any other weaver failure.
-            try:
-                woven = await delegate(ctx, "weaver", note_text + "\n\n" + weaver_prompt)
-                if woven and woven.strip():
-                    note_text = woven
-            except Exception as exc:  # noqa: BLE001 - fall back to raw chunks
-                detail = str(exc).strip() or type(exc).__name__
-                await ctx.emit(LogMessage, level="warning",
-                               text=f"weaver failed ({detail}); using the unwoven assembly")
+
+        # The whole-note weaver round-trip was removed 2026-09-09.  It sent
+        # the entire assembled note to a "weaver" agent and replaced the body
+        # with whatever came back — on a live run this destroyed 72% of a
+        # 9,000-word note (reduced to ~2,500 words) and injected paragraphs
+        # about subjects the note was not about.  Nothing caught it because
+        # _write_note_atomically has no truncation guard (unlike _write_back).
+        #
+        # The replacement is TransitionStage, which runs after assembly and
+        # before word count.  It sends only a skeleton (topic, headings,
+        # first/last sentence per paragraph) to the weaver model and splices
+        # one transition sentence per section back into the note body.  The
+        # note body never round-trips through a model.
 
         # --- resolve hallucinated wikilinks ----------------------------------
         # A model writing transition prose can spontaneously produce [[links]]
@@ -941,6 +924,202 @@ class AssemblyStage(PipelineStage):
             heading = ctx.headings[i - 1] if i - 1 < len(ctx.headings) else f"Section {i}"
             parts.append(f"## {heading}\n\n{body}\n")
         return "\n".join(parts)
+
+
+def _weaver_pool_name(provider_name: str) -> str:
+    """Which key-pool section funds *provider_name*.
+
+    Gemini's keys live under "google" -- the same section the embedding
+    provider draws from, because they are Google AI Studio keys.  Every other
+    provider spends from a section of its own name.
+
+    This existed inline as a hardcoded load_pool("google") that ignored the
+    configured provider entirely, so a vault naming a different weaver would
+    have been handed Google keys.  That is the conflation that once made a
+    valid Gemini key look expired: it was being offered to Mistral.
+    """
+    return "google" if provider_name == "gemini" else provider_name
+
+
+class TransitionStage(PipelineStage):
+    """Generate and splice transition sentences — the note body never
+    round-trips through a model.
+
+    Before the 2026-09-09 redesign, the weaver agent received the entire
+    assembled note and returned a replacement.  On a live run this destroyed
+    72% of the content.  The rule going forward is absolute: the note body
+    must never round-trip through a model.  This stage sends only a skeleton
+    (topic, headings, first/last sentence per paragraph) and receives back
+    one numbered transition per section.
+
+    Every failure mode — no weaver agent, no API key, provider error,
+    unparseable response, zero transitions surviving the guard — leaves the
+    assembled note unchanged and emits a warning.
+    """
+
+    name: Stage = "transitions"
+    id = "transitions"
+
+    async def run(self, ctx: RunContext) -> None:
+        assert ctx.note_path is not None
+        from avicenna.pipeline.transitions import (
+            build_transition_prompt,
+            extract_skeleton,
+            parse_transitions,
+            splice_transitions,
+            validate_transition,
+        )
+
+        # --- degrade: no weaver agent ----------------------------------------
+        if "weaver" not in ctx.spec.vault.agents:
+            await ctx.emit(
+                LogMessage, level="warning",
+                text="no weaver agent in this vault; transitions skipped, "
+                     "note body unchanged",
+            )
+            return
+
+        # --- resolve the weaver provider --------------------------------------
+        # The user wants Gemini for this.  Do not hardcode a vendor name in
+        # stage logic: resolve it through the provider registry from a setting
+        # (default "gemini"), with its keys from the pool.  For testing,
+        # RunSpec.weaver_provider may be set explicitly (FakeProvider).
+        if ctx.spec.weaver_provider is not None:
+            weaver_provider = ctx.spec.weaver_provider
+        else:
+            try:
+                from avicenna.keypool import load_pool
+                from avicenna.providers.registry import get_provider
+                from avicenna.settings import load_vault_config
+
+                # The vendor name is configuration, not stage logic.  The
+                # default is gemini because that is what this vault weaves
+                # with; a vault that sets weaver_provider gets its own.
+                cfg = load_vault_config(Path(ctx.spec.vault.root))
+                provider_name = str(cfg.get("weaver_provider", "gemini"))
+                # Keys are scoped to the provider that will spend them.
+                pool = load_pool(_weaver_pool_name(provider_name))
+                # get_provider takes **kwargs, so mypy checks nothing here and
+                # a wrong keyword surfaces only at runtime -- where this whole
+                # block's `except` would swallow it and silently skip every
+                # transition.  The construction below mirrors auth.build_provider
+                # exactly: providers still take a single api_key alongside the
+                # pool they rotate through.  Timeout and budget are left to the
+                # factory, which resolves the Gemini-specific env vars.
+                key = pool._keys[0]
+                weaver_provider = get_provider(
+                    provider_name, api_key=key, pool=pool,
+                )
+            except Exception as exc:  # noqa: BLE001 - degrade gracefully
+                detail = str(exc).strip() or type(exc).__name__
+                await ctx.emit(
+                    LogMessage, level="warning",
+                    text=f"transition provider unavailable ({detail}); "
+                         "transitions skipped, note body unchanged",
+                )
+                return
+
+        # --- build skeleton and call provider ---------------------------------
+        note_text = ctx.note_path.read_text(encoding="utf-8", errors="replace")
+        skeleton = extract_skeleton(note_text, ctx.spec.topic)
+        if not skeleton.sections:
+            await ctx.emit(
+                LogMessage, level="warning",
+                text="no sections found in note; transitions skipped",
+            )
+            return
+
+        prompt = build_transition_prompt(skeleton)
+        weaver_agent = ctx.spec.vault.agents["weaver"]
+        try:
+            from avicenna.session import one_shot
+            raw = await one_shot(
+                provider=weaver_provider,
+                system=weaver_agent.system_prompt,
+                prompt=prompt,
+                bus=ctx.spec.bus,
+                run_id=ctx.spec.run_id,
+            )
+        except Exception as exc:  # noqa: BLE001 - degrade gracefully
+            detail = str(exc).strip() or type(exc).__name__
+            await ctx.emit(
+                LogMessage, level="warning",
+                text=f"weaver provider error ({detail}); "
+                     "transitions skipped, note body unchanged",
+            )
+            return
+
+        if not raw or not raw.strip():
+            await ctx.emit(
+                LogMessage, level="warning",
+                text="weaver returned empty response; transitions skipped",
+            )
+            await ctx.emit(
+                TransitionsApplied,
+                requested=len(skeleton.sections), accepted=0, dropped=0,
+            )
+            return
+
+        # --- parse, validate, splice -----------------------------------------
+        parsed = parse_transitions(raw)
+        requested = len(skeleton.sections)
+        accepted_map: dict[int, str] = {}
+        dropped = 0
+        for pt in parsed:
+            if pt.index < 1 or pt.index > requested:
+                dropped += 1
+                continue
+            sec = skeleton.sections[pt.index - 1]
+            preceding = (
+                skeleton.sections[pt.index - 2].heading
+                if pt.index >= 2 else ctx.spec.topic
+            )
+            verdict = validate_transition(
+                pt.text,
+                section_heading=sec.heading,
+                preceding_heading=preceding,
+                note_topic=ctx.spec.topic,
+            )
+            if verdict.accepted:
+                accepted_map[pt.index] = pt.text
+            else:
+                dropped += 1
+                await ctx.emit(
+                    LogMessage, level="warning",
+                    text=f"transition {pt.index} dropped: {verdict.reason}",
+                )
+
+        # Also count sections that had no parsed transition at all
+        for i in range(1, requested + 1):
+            if i not in accepted_map and not any(p.index == i for p in parsed):
+                dropped += 1
+
+        if not accepted_map:
+            await ctx.emit(
+                LogMessage, level="warning",
+                text="zero transitions survived validation; note body unchanged",
+            )
+            await ctx.emit(
+                TransitionsApplied,
+                requested=requested, accepted=0, dropped=dropped,
+            )
+            return
+
+        # --- splice and write back --------------------------------------------
+        new_text = splice_transitions(note_text, accepted_map)
+        written = await _write_back(ctx, "transitions", new_text)
+        await ctx.emit(
+            TransitionsApplied,
+            requested=requested,
+            accepted=len(accepted_map),
+            dropped=dropped,
+        )
+        if not written:
+            await ctx.emit(
+                LogMessage, level="warning",
+                text="transition splice rejected by truncation guard; "
+                     "note body unchanged",
+            )
 
 
 class WordCountStage(PipelineStage):
@@ -1600,6 +1779,7 @@ def build_stages() -> list[PipelineStage]:
         ManifestStage(),
         SectionsStage(),
         AssemblyStage(),
+        TransitionStage(),
         WordCountStage(),
         # TocStage removed: FormatterStage.apply_structure generates the TOC
         # after numbering, so every anchor resolves.  A TOC generated before

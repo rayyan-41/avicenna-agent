@@ -53,6 +53,7 @@ export type EventName =
   | 'TagsValidated'
   | 'SchemaDetected'
   | 'ThemeMinted'
+  | 'TransitionsApplied'
   | 'MocUpdated'
   | 'NoteWritten'
   | 'PlanApprovalRequested'
@@ -65,6 +66,7 @@ export const STAGES = [
   'manifest',
   'sections',
   'assembly',
+  'transitions',
   'wordcount',
   'tagging',
   'moc',
