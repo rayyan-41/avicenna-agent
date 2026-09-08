@@ -9,10 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from avicenna.events import (
-    LinkCandidatesFound, LogMessage, ManifestWritten, MocUpdated,
-    NoteWritten, PreflightDeclared, SchemaDetected, Stage, TagsProposed,
-    TagsValidated, ThemeMinted, WordCountChecked,
+    LinkCandidatesFound, LogMessage, ManifestWritten, MarkdownNormalised,
+    MocUpdated, NoteWritten, PreflightDeclared, SchemaDetected, Stage,
+    TagsProposed, TagsValidated, ThemeMinted, WordCountChecked,
 )
+from avicenna.pipeline.normalise import normalise_markdown
 from avicenna.pipeline.schema import FrontmatterSchema, detect_frontmatter_schema
 from avicenna.pipeline.context import RunContext
 from avicenna.pipeline.delegate import delegate
@@ -833,6 +834,27 @@ class AssemblyStage(PipelineStage):
                 detail = str(exc).strip() or type(exc).__name__
                 await ctx.emit(LogMessage, level="warning",
                                text=f"weaver failed ({detail}); using the unwoven assembly")
+
+        # --- normalise structural damage --------------------------------------
+        # Models over-eagerly produce horizontal rules and break heading
+        # spacing.  The normaliser collapses consecutive rules, removes rules
+        # adjacent to headings, caps blank-line runs, and ensures a blank line
+        # around every heading — idempotently, with fenced code blocks
+        # byte-identical and frontmatter untouched.  It is called here, after
+        # the weaver round-trip and before the note reaches the vault, so every
+        # note on disk carries clean structure regardless of which model wrote
+        # it.
+        words_before = len(note_text.split())
+        norm = normalise_markdown(note_text)
+        note_text = norm.text
+        await ctx.emit(
+            MarkdownNormalised,
+            rules_removed=norm.rules_removed,
+            consecutive_rules_collapsed=norm.consecutive_rules_collapsed,
+            adjacent_rules_removed=norm.adjacent_rules_removed,
+            words_before=words_before,
+            words_after=len(note_text.split()),
+        )
 
         # --- place it in the vault, not in _tmp ------------------------------
         dest = _note_destination(ctx)

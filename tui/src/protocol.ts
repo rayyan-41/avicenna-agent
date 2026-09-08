@@ -48,6 +48,7 @@ export type EventName =
   | 'ToolInvoked'
   | 'ToolReturned'
   | 'WordCountChecked'
+  | 'MarkdownNormalised'
   | 'TagsProposed'
   | 'TagsValidated'
   | 'SchemaDetected'

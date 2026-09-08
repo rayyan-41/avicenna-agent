@@ -983,6 +983,13 @@ export class App {
         );
         return;
 
+      case 'MarkdownNormalised':
+        this.write(
+          `normalised: ${num('rules_removed')} rules removed, ` +
+            `${num('words_before')}w -> ${num('words_after')}w`,
+        );
+        return;
+
       case 'TagsProposed':
         this.write(`tags proposed: ${list('tags').join(', ')}`);
         return;

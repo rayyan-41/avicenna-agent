@@ -107,6 +107,15 @@ class WordCountChecked(Event):
 
 
 @dataclass(frozen=True)
+class MarkdownNormalised(Event):
+    rules_removed: int = 0
+    consecutive_rules_collapsed: int = 0
+    adjacent_rules_removed: int = 0
+    words_before: int = 0
+    words_after: int = 0
+
+
+@dataclass(frozen=True)
 class TagsProposed(Event):
     tags: tuple[str, ...] = ()
 
@@ -173,6 +182,7 @@ __all__ = [
     "Stage", "Event", "RunStarted", "PreflightDeclared", "ManifestWritten",
     "SectionStarted", "SectionCompleted", "SectionFailed", "StageEntered",
     "StageCompleted", "ToolInvoked", "ToolReturned", "WordCountChecked",
+    "MarkdownNormalised",
     "TagsProposed", "TagsValidated", "SchemaDetected", "ThemeMinted",
     "LinkCandidatesFound", "MocUpdated", "NoteWritten", "RunFailed",
     "RunComplete", "LogMessage",
