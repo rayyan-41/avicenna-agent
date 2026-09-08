@@ -44,6 +44,14 @@ include = ["avicenna*"]
 # Three tests in test_providers.py were failing for exactly this reason.
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# The repository root has to be importable: three test modules import from
+# `scripts/`, which is not a package and is not installed by `pip install -e`.
+# Without this, whether the suite runs at all depended on how it was invoked --
+# `python -m pytest` puts the working directory on sys.path and passed, bare
+# `pytest` does not and failed collection outright.  CI runs the bare form, so
+# its Tests step aborted during collection and ran ZERO tests for a dozen
+# commits while every local run was green.
+pythonpath = ["."]
 
 # keyring genuinely ships no type stubs (there is no types-keyring on PyPI).
 # This override is scoped to that one package; every other missing import
