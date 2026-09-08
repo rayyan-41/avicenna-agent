@@ -9,10 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from avicenna.events import (
-    LinkCandidatesFound, LogMessage, ManifestWritten, MocUpdated,
-    NoteWritten, PreflightDeclared, SchemaDetected, Stage, TagsProposed,
-    TagsValidated, ThemeMinted, WordCountChecked,
+    LinkCandidatesFound, LogMessage, ManifestWritten, MarkdownNormalised,
+    MocUpdated, NoteWritten, PreflightDeclared, SchemaDetected, Stage,
+    TagsProposed, TagsValidated, ThemeMinted, WordCountChecked,
 )
+from avicenna.pipeline.normalise import normalise_markdown
 from avicenna.pipeline.schema import FrontmatterSchema, detect_frontmatter_schema
 from avicenna.pipeline.context import RunContext
 from avicenna.pipeline.delegate import delegate
@@ -522,6 +523,35 @@ async def _write_back(ctx: RunContext, stage: str, produced: str) -> bool:
         result_body = candidate
         ref_body = current.strip()
 
+    # --- normalise structural damage ------------------------------------------
+    # The formatter, tagger and linker push whole-note model output through
+    # this function.  Models over-eagerly produce horizontal rules and break
+    # heading spacing; the normaliser is idempotent and frontmatter-safe, so
+    # it runs on every revision that passes through this funnel.  The guard
+    # runs after normalisation so it validates the bytes that actually land on
+    # disk.  ref_body is itself already normalised (by AssemblyStage or an
+    # earlier pass through this function), so both sides of the ratio are
+    # like-for-like.
+    words_before_norm = len(result_text.split())
+    norm = normalise_markdown(result_text)
+    if norm.text != result_text:
+        result_text = norm.text
+        # Re-split structurally rather than slicing at the pre-normalisation
+        # frontmatter length.  The slice is only correct when the normaliser
+        # leaves the frontmatter byte-identical; _split_frontmatter makes no
+        # such assumption.
+        _, norm_body = _split_frontmatter(result_text)
+        result_body = norm_body.strip()
+        await ctx.emit(
+            MarkdownNormalised,
+            stage=stage,
+            rules_removed=norm.rules_removed,
+            consecutive_rules_collapsed=norm.consecutive_rules_collapsed,
+            adjacent_rules_removed=norm.adjacent_rules_removed,
+            words_before=words_before_norm,
+            words_after=len(result_text.split()),
+        )
+
     # --- truncation check on BODY lengths ------------------------------------
     if len(result_body) < len(ref_body) * 0.75:
         await ctx.emit(
@@ -833,6 +863,28 @@ class AssemblyStage(PipelineStage):
                 detail = str(exc).strip() or type(exc).__name__
                 await ctx.emit(LogMessage, level="warning",
                                text=f"weaver failed ({detail}); using the unwoven assembly")
+
+        # --- normalise structural damage --------------------------------------
+        # Models over-eagerly produce horizontal rules and break heading
+        # spacing.  The normaliser collapses consecutive rules, removes rules
+        # adjacent to headings, caps blank-line runs, and ensures a blank line
+        # around every heading — idempotently, with fenced code blocks
+        # byte-identical and frontmatter untouched.  It is called here, after
+        # the weaver round-trip and before the note reaches the vault, so every
+        # note on disk carries clean structure regardless of which model wrote
+        # it.
+        words_before = len(note_text.split())
+        norm = normalise_markdown(note_text)
+        note_text = norm.text
+        await ctx.emit(
+            MarkdownNormalised,
+            stage="assembly",
+            rules_removed=norm.rules_removed,
+            consecutive_rules_collapsed=norm.consecutive_rules_collapsed,
+            adjacent_rules_removed=norm.adjacent_rules_removed,
+            words_before=words_before,
+            words_after=len(note_text.split()),
+        )
 
         # --- place it in the vault, not in _tmp ------------------------------
         dest = _note_destination(ctx)
