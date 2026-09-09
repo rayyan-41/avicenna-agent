@@ -58,6 +58,24 @@ PROVIDER_TIMEOUT_DEFAULT: float = 300.0
 # vault config.
 PROVIDER_BUDGET_DEFAULT: float = 900.0
 
+# Semantic similarity threshold for the drift guard.  Above this cosine
+# similarity, a proposed theme/type is considered equivalent to the nearest
+# existing key and merged instead of minted.
+#
+# THIS VALUE IS INFERRED, NOT MEASURED.  It is a defensible starting point
+# for gemini-embedding-2 at 768 dimensions: ``nationalism`` /
+# ``national-identity`` should merge (expected >0.85), ``epistemology`` /
+# ``eschatology`` must not (expected <0.70).  The right value would be
+# settled by running the pairwise similarity matrix over the user's actual
+# taxonomy and adjusting until both traps behave correctly.  Until then,
+# 0.80 is conservative enough to avoid false merges while catching obvious
+# duplicates.  A wrong threshold is diagnosable from the event stream:
+# SemanticGuardDecision carries ``nearest``, ``similarity`` and
+# ``threshold`` precisely so that a threshold fault is visible.
+SEMANTIC_GUARD_THRESHOLD_DEFAULT: float = 0.80
+SEMANTIC_GUARD_THRESHOLD_MIN: float = 0.50
+SEMANTIC_GUARD_THRESHOLD_MAX: float = 0.99
+
 
 # ---------------------------------------------------------------------------
 # File I/O
@@ -236,3 +254,68 @@ def resolve_concurrency(
 
     # 4. Default
     return MAX_CONCURRENCY_DEFAULT
+
+
+def _clamp_semantic_guard_threshold(value: float) -> float:
+    """Clamp to [SEMANTIC_GUARD_THRESHOLD_MIN, SEMANTIC_GUARD_THRESHOLD_MAX]."""
+    if value < SEMANTIC_GUARD_THRESHOLD_MIN:
+        warn(
+            f"semantic guard threshold {value} below minimum "
+            f"{SEMANTIC_GUARD_THRESHOLD_MIN}, clamping"
+        )
+        return SEMANTIC_GUARD_THRESHOLD_MIN
+    if value > SEMANTIC_GUARD_THRESHOLD_MAX:
+        warn(
+            f"semantic guard threshold {value} above maximum "
+            f"{SEMANTIC_GUARD_THRESHOLD_MAX}, clamping"
+        )
+        return SEMANTIC_GUARD_THRESHOLD_MAX
+    return value
+
+
+def resolve_semantic_guard_threshold(
+    *,
+    overrides: dict[str, Any] | None = None,
+    vault_config: dict[str, Any] | None = None,
+) -> float:
+    """Resolve the semantic guard threshold through the precedence chain.
+
+    Precedence (highest wins):
+      1. CLI flag  (overrides dict)
+      2. Environment variable  ``AVICENNA_SEMANTIC_GUARD_THRESHOLD``
+      3. Vault config  ``semantic_guard_threshold``
+      4. Built-in default  ``SEMANTIC_GUARD_THRESHOLD_DEFAULT``
+
+    The resolved value is clamped to
+    ``[SEMANTIC_GUARD_THRESHOLD_MIN, SEMANTIC_GUARD_THRESHOLD_MAX]``.
+    """
+    overrides = overrides or {}
+    vault_config = vault_config or {}
+
+    # 1. CLI flag
+    if "semantic_guard_threshold" in overrides:
+        try:
+            return _clamp_semantic_guard_threshold(
+                float(overrides["semantic_guard_threshold"])
+            )
+        except (ValueError, TypeError):
+            pass
+
+    # 2. Environment variable
+    env = os.environ.get("AVICENNA_SEMANTIC_GUARD_THRESHOLD")
+    if env is not None:
+        try:
+            return _clamp_semantic_guard_threshold(float(env))
+        except ValueError:
+            pass
+
+    # 3. Vault config
+    cfg_val = vault_config.get("semantic_guard_threshold")
+    if cfg_val is not None:
+        try:
+            return _clamp_semantic_guard_threshold(float(cfg_val))
+        except (ValueError, TypeError):
+            pass
+
+    # 4. Default
+    return SEMANTIC_GUARD_THRESHOLD_DEFAULT

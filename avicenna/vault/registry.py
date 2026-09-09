@@ -18,6 +18,8 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -65,22 +67,28 @@ def semantic_guard(
 ) -> str | None:
     """Return an existing key that is semantically equivalent to *proposed*.
 
-    This is a seam for the embedding-based similarity check described in
-    the design spec.  When the embedding provider is integrated, this
-    function will embed *proposed* (with its *context*) and compare against
-    every existing key's embedding.  Above the similarity threshold the
-    existing key is returned; below it, ``None`` signals a new mint.
+    This is the *default* guard, and it always returns ``None``: every
+    proposed key that passes normalization is accepted as genuinely new.
+    The embedding-backed guard is not a replacement for this function — it
+    is precomputed asynchronously by the pipeline and handed to a specific
+    ``ThemeRegistry`` through :meth:`ThemeRegistry.guard_decisions`, because
+    embedding is async and the registry's resolve path is not.
 
-    Currently always returns ``None`` — every proposed key that passes
-    normalization is accepted as genuinely new.  Do NOT replace this with
-    a fuzzy string-similarity heuristic; a wrong merge silently collapses
-    distinct ideas, which is worse than the drift it prevents.
+    Keeping this a pure function with no state matters for two reasons: it
+    stays trivially testable, and ``registry.py`` stays importable without a
+    provider.  A vault with no embedding provider is legitimate and must
+    behave exactly as it always has.
+
+    Do NOT replace this with a fuzzy string-similarity heuristic; a wrong
+    merge silently collapses distinct ideas, which is worse than the drift
+    it prevents.  ``nationalism`` and ``national-identity`` are
+    string-similar and should merge; ``epistemology`` and ``eschatology``
+    are string-similar and must not.  Only meaning separates those.
 
     Args:
         proposed: The proposed theme or type, after normalization.
         existing_keys: Normalized keys already in the registry.
-        context: The sentence-level context that produced the key (unused
-            until the embedding provider is available).
+        context: The sentence-level context that produced the key.
     """
     return None
 
@@ -390,6 +398,11 @@ class ThemeRegistry:
     _minted_themes: list[str] = field(default_factory=list)
     _minted_types: list[str] = field(default_factory=list)
     _dirty: bool = False
+    #: Precomputed drift-guard decisions for this registry, keyed by
+    #: ``(normalized_key, kind)``.  ``None`` means no oracle ran and the pure
+    #: ``semantic_guard`` default applies; an empty dict means the oracle ran
+    #: and found nothing to merge.  See :meth:`guard_decisions`.
+    _guard_decisions: dict[tuple[str, str], str] | None = None
 
     @classmethod
     def load(cls, taxonomy_path: Path) -> ThemeRegistry:
@@ -411,6 +424,73 @@ class ThemeRegistry:
             nk = _normalize(t)
             if nk not in self._type_canonical:
                 self._type_canonical[nk] = t
+
+    # --- the drift guard seam ------------------------------------------------
+    # Embedding is async; `resolve_theme` and `resolve_type` are not, and they
+    # are called from synchronous code throughout.  Making them async would
+    # push `await` up through every caller and every test for the sake of one
+    # optional check.
+    #
+    # So the decision is computed *before* the resolve loop runs -- the
+    # pipeline embeds every candidate in one batch, works out which should
+    # merge, and hands the answers to this registry for the duration of that
+    # loop.  The state lives on the instance rather than on the module: two
+    # registries (a run and a test, or two runs in one process) must not see
+    # each other's decisions, and a module global would also leave
+    # `semantic_guard` impure, which is the one thing its docstring asks
+    # callers not to do.
+
+    @contextmanager
+    def guard_decisions(
+        self, decisions: dict[tuple[str, str], str],
+    ) -> Iterator[None]:
+        """Apply precomputed drift-guard *decisions* for the duration of the block.
+
+        Restores the previous state on exit, including on exception, so a
+        failure inside the resolve loop cannot leave stale decisions behind
+        for a later call (the floor-tag path resolves a second time).
+        """
+        previous = self._guard_decisions
+        self._guard_decisions = decisions
+        try:
+            yield
+        finally:
+            self._guard_decisions = previous
+
+    def _guard(self, nk: str, kind: str, existing_keys: list[str]) -> str | None:
+        """The guard for one normalized key: precomputed answer, else default."""
+        if self._guard_decisions is not None:
+            return self._guard_decisions.get((nk, kind))
+        return semantic_guard(nk, existing_keys)
+
+    def theme_keys(self) -> list[str]:
+        """Normalized keys currently in the theme registry."""
+        return list(self._theme_canonical)
+
+    def type_keys(self) -> list[str]:
+        """Normalized keys currently in the type registry."""
+        return list(self._type_canonical)
+
+    def guard_candidate(self, proposed: str) -> str | None:
+        """The normalized key the guard would be asked about, or ``None``.
+
+        ``None`` means the guard will never see this tag: it is malformed, or
+        it already resolves to a known theme or type, so no mint is at stake.
+        Callers use this to build the batch to embed -- embedding a tag whose
+        answer is already known is a wasted call against a rate-limited API.
+
+        This exists so the pipeline does not have to reach into the
+        registry's private validation helpers and canonical maps to work out
+        the same thing, which is how it was first written.
+        """
+        if self._validate_raw(proposed) is not None:
+            return None
+        nk = _normalize(proposed)
+        if self._validate_tag(nk.replace(" ", "-")) is not None:
+            return None
+        if nk in self._theme_canonical or nk in self._type_canonical:
+            return None
+        return nk
 
     # --- resolution ----------------------------------------------------------
 
@@ -446,7 +526,7 @@ class ThemeRegistry:
         return None
 
     def _lookup(
-        self, proposed: str, canonical_map: dict[str, str],
+        self, proposed: str, canonical_map: dict[str, str], *, kind: str = "",
     ) -> tuple[str | None, str | None]:
         """Read-only lookup: check if *proposed* is already known.
 
@@ -467,7 +547,7 @@ class ThemeRegistry:
         # Fuzzy-match via normalized key.
         if nk in canonical_map:
             return canonical_map[nk], None
-        guard = semantic_guard(nk, list(canonical_map.keys()))
+        guard = self._guard(nk, kind, list(canonical_map.keys()))
         if guard is not None:
             return guard, None
         return None, None
@@ -511,7 +591,7 @@ class ThemeRegistry:
             return proposed, False
         if nk in self._theme_canonical:
             return self._theme_canonical[nk], False
-        guard = semantic_guard(nk, list(self._theme_canonical.keys()))
+        guard = self._guard(nk, "theme", list(self._theme_canonical))
         if guard is not None:
             return guard, False
         self._mint(tag_key, self._theme_canonical, "themes", self._minted_themes)
@@ -532,7 +612,7 @@ class ThemeRegistry:
             return proposed, False
         if nk in self._type_canonical:
             return self._type_canonical[nk], False
-        guard = semantic_guard(nk, list(self._type_canonical.keys()))
+        guard = self._guard(nk, "type", list(self._type_canonical))
         if guard is not None:
             return guard, False
         self._mint(tag_key, self._type_canonical, "types", self._minted_types)
@@ -545,14 +625,14 @@ class ThemeRegistry:
         means the tag is genuinely new and is eligible for minting.
         Never mutates.
         """
-        return self._lookup(proposed, self._theme_canonical)
+        return self._lookup(proposed, self._theme_canonical, kind="theme")
 
     def lookup_type(self, proposed: str) -> tuple[str | None, str | None]:
         """Read-only check against the type registry.
 
         Same contract as ``lookup_theme``.
         """
-        return self._lookup(proposed, self._type_canonical)
+        return self._lookup(proposed, self._type_canonical, kind="type")
 
     def mint_theme(self, tag_key: str) -> None:
         """Mint a new theme.  Call only after ``lookup_theme`` returned

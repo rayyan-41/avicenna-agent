@@ -6,6 +6,7 @@ import os
 import re
 from pathlib import Path
 from collections.abc import Mapping
+from contextlib import AbstractContextManager, nullcontext
 from typing import Any
 
 from avicenna.events import (
@@ -1437,7 +1438,18 @@ async def _resolve_tags_against_registry(
     Decides BEFORE mutating: looks up the tag in themes, then types, then
     mints only if it is in neither.  Never uses the mint-then-undo pattern,
     which left residue when anything between the two steps went wrong.
+
+    When an embedding provider is available, the semantic drift guard runs
+    BEFORE the resolve loop: it embeds every tag that would otherwise be
+    minted alongside every existing registry key, computes cosine
+    similarity, and injects merge decisions into the registry's
+    ``semantic_guard`` seam.  The resolve loop then sees those decisions
+    transparently.  When no provider is available (no API key, construction
+    failure, embed error), the guard degrades to the previous behaviour:
+    every proposed key is minted, and the run says so via a ``LogMessage``.
     """
+    from avicenna.events import SemanticGuardDecision
+
     registry = ctx.theme_registry
     if registry is None:
         return tag_line
@@ -1460,36 +1472,142 @@ async def _resolve_tags_against_registry(
     new_types: list[str] = []
     rejected: list[str] = []
 
+    # --- semantic drift guard ------------------------------------------------
+    # Only tags that would actually reach the guard are worth embedding: a tag
+    # that is a known entity, is malformed, or already normalizes onto an
+    # existing theme or type has no mint at stake, and embedding it is a wasted
+    # call against a rate-limited API.  `guard_candidate` answers exactly that
+    # question, so the pipeline does not have to duplicate the registry's
+    # validation rules to work it out.
+    guard_candidates: list[tuple[str, str]] = []  # (normalized key, context)
     for tag in raw_tags:
         if tag in all_entities:
-            resolved.append(tag)
             continue
-        # Decide BEFORE mutating: look the tag up in themes, then types,
-        # then mint only if it is in neither.  No mint-then-undo.
-        canon, reason = registry.lookup_theme(tag)
-        if reason is not None:
-            rejected.append(f"{tag}: {reason}")
-            continue
-        if canon is not None:
-            # Already in the theme registry — reuse.
-            resolved.append(canon)
-            continue
-        canon, reason = registry.lookup_type(tag)
-        if reason is not None:
-            rejected.append(f"{tag}: {reason}")
-            continue
-        if canon is not None:
-            # Already a known type — use it.
-            resolved.append(canon)
-            continue
-        # Neither an existing theme nor an existing type.  Mint as a theme
-        # (themes are the growing category).  Use the normalized kebab-case
-        # key for the mint so the registry stores a consistent form.
-        nk = _normalize_tag(tag)
-        tag_key = nk.replace(" ", "-")
-        registry.mint_theme(tag_key)
-        new_themes.append(tag_key)
-        resolved.append(tag_key)
+        nk = registry.guard_candidate(tag)
+        if nk is not None:
+            guard_candidates.append((nk, ""))
+
+    threshold = 0.0
+    decisions: dict[tuple[str, str], str] = {}
+    oracle_ran = False
+    try:
+        if guard_candidates:
+            from avicenna.keypool import load_pool
+            from avicenna.providers import get_embedding_provider
+            from avicenna.settings import (
+                load_vault_config,
+                resolve_semantic_guard_threshold,
+            )
+            from avicenna.vault.drift import DriftOracle
+
+            vault_config = load_vault_config(
+                ctx.spec.vault.root if ctx.spec.vault else None,
+            )
+            threshold = resolve_semantic_guard_threshold(
+                overrides=ctx.spec.overrides,
+                vault_config=vault_config,
+            )
+            pool = load_pool("google")
+            # Mirror build_provider's pattern: extract the first key and pass
+            # it as api_key=.  A previous agent passed keys=pool here, and
+            # because get_embedding_provider is (name, **kwargs), mypy checked
+            # nothing — the TypeError landed in a broad except, and the feature
+            # was silently dead on every real run while the suite stayed green.
+            key = pool._keys[0]
+            provider = get_embedding_provider("google", api_key=key)
+            oracle = DriftOracle(provider, threshold)
+
+            theme_keys = registry.theme_keys()
+            type_keys = registry.type_keys()
+
+            theme_verdicts = await oracle.check_batch(guard_candidates, theme_keys)
+            type_verdicts = await oracle.check_batch(guard_candidates, type_keys)
+
+            # Hand the decisions to this registry for the resolve loop below.
+            for v in theme_verdicts:
+                if v.merge_with is not None:
+                    decisions[(v.proposed, "theme")] = v.merge_with
+            for v in type_verdicts:
+                if v.merge_with is not None:
+                    decisions[(v.proposed, "type")] = v.merge_with
+            oracle_ran = True
+
+            # Emit SemanticGuardDecision for every verdict — reuse and mint
+            # alike.  A mint count alone cannot distinguish a registry
+            # fragmenting into synonyms from one collapsing distinct ideas;
+            # both are threshold faults and both need the margin to be
+            # diagnosable.
+            for v in theme_verdicts:
+                await ctx.emit(
+                    SemanticGuardDecision,
+                    kind="theme",
+                    proposed=v.proposed,
+                    decision="reuse" if v.merge_with else "mint",
+                    nearest=v.nearest,
+                    similarity=v.similarity,
+                    threshold=threshold,
+                )
+            for v in type_verdicts:
+                await ctx.emit(
+                    SemanticGuardDecision,
+                    kind="type",
+                    proposed=v.proposed,
+                    decision="reuse" if v.merge_with else "mint",
+                    nearest=v.nearest,
+                    similarity=v.similarity,
+                    threshold=threshold,
+                )
+    except Exception as exc:
+        # No embedding provider configured, no API key, construction failure,
+        # embed error — the guard degrades to the previous behaviour and the
+        # run says so.  Never abort a run or bubble out of the tagging stage
+        # because a similarity check was unavailable.  Do NOT clear
+        # _guard_decisions here — if the oracle failed, we never set them
+        # in this call, and the finally block handles cleanup.
+        await ctx.emit(
+            LogMessage, level="warning",
+            text=f"semantic guard unavailable; all proposals will be minted: {exc}",
+        )
+
+    # The decisions apply only to this loop.  Scoping them to the registry
+    # instance rather than to the module keeps two registries -- a run and a
+    # test, or two runs in one process -- from seeing each other's answers, and
+    # the context manager restores the previous state even if the loop raises,
+    # so the floor-tag path cannot resolve against stale guard state.
+    guard_scope: AbstractContextManager[None] = (
+        registry.guard_decisions(decisions) if oracle_ran else nullcontext()
+    )
+    with guard_scope:
+        for tag in raw_tags:
+            if tag in all_entities:
+                resolved.append(tag)
+                continue
+            # Decide BEFORE mutating: look the tag up in themes, then types,
+            # then mint only if it is in neither.  No mint-then-undo.
+            canon, reason = registry.lookup_theme(tag)
+            if reason is not None:
+                rejected.append(f"{tag}: {reason}")
+                continue
+            if canon is not None:
+                # Already in the theme registry — reuse.
+                resolved.append(canon)
+                continue
+            canon, reason = registry.lookup_type(tag)
+            if reason is not None:
+                rejected.append(f"{tag}: {reason}")
+                continue
+            if canon is not None:
+                # Already a known type — use it.
+                resolved.append(canon)
+                continue
+            # Neither an existing theme nor an existing type.  Mint as a theme
+            # (themes are the growing category).  Use the normalized kebab-case
+            # key for the mint so the registry stores a consistent form.
+            nk = _normalize_tag(tag)
+            tag_key = nk.replace(" ", "-")
+            registry.mint_theme(tag_key)
+            new_themes.append(tag_key)
+            resolved.append(tag_key)
 
     if rejected:
         await ctx.emit(
