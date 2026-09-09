@@ -7,6 +7,7 @@ none touch the real vault.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import stat
@@ -482,3 +483,58 @@ def test_multiple_mints_in_one_session(tmp_path: Path) -> None:
     reg.persist()
     data = _load_taxonomy(vault)
     assert len(data["themes"]) == 3
+
+
+def test_declared_entities_are_never_minted_as_themes(tmp_path: Path) -> None:
+    """An entity tag must pass through resolution untouched.
+
+    The pass-through set is built from the closed vocabularies -- domains,
+    categories, markers -- and for a long time it was named `all_entities`
+    while containing no entities at all.  So `kant` was not recognised, fell
+    through to the theme registry, failed the lookup, and was minted as a
+    theme.  That is the "tagger files people as themes" defect arriving from
+    the Python side rather than the model's, and it is the most likely source
+    of some of the eight orphan themes one live run left in the vault.
+
+    It stayed invisible while the tagger reliably produced no entities at all.
+    Now that the harness assembles them and derives them from the topic, every
+    note would mint its own subject as a theme.
+    """
+    vault, ctx = _make_ctx(tmp_path)
+    _seed_taxonomy(vault, themes=["philosophy"])
+    reg = ThemeRegistry.load(_taxonomy_path(vault))
+    ctx.theme_registry = reg
+
+    before = list(reg.raw.get("themes", []))
+
+    result = asyncio.run(_resolve_tags_against_registry(
+        "general, note, philosophy, kant, rousseau, cli",
+        ctx,
+        entities=["kant", "rousseau"],
+    ))
+
+    # The entities survive into the resolved line, unchanged.
+    assert "kant" in result.split(", ")
+    assert "rousseau" in result.split(", ")
+    # And nothing about them reached the registry.
+    assert reg.raw.get("themes", []) == before
+    assert "kant" not in reg.theme_keys()
+    assert "rousseau" not in reg.theme_keys()
+
+
+def test_undeclared_entity_still_mints(tmp_path: Path) -> None:
+    """The converse, asserted so the mechanism is not mistaken for magic.
+
+    Entities are an open vocabulary, so nothing in the tag itself marks it as
+    one.  A caller that does not declare them gets the old behaviour, which is
+    why the declaration is a parameter rather than an inference.
+    """
+    vault, ctx = _make_ctx(tmp_path)
+    _seed_taxonomy(vault, themes=["philosophy"])
+    reg = ThemeRegistry.load(_taxonomy_path(vault))
+    ctx.theme_registry = reg
+
+    asyncio.run(_resolve_tags_against_registry(
+        "general, note, philosophy, kant, cli", ctx,
+    ))
+    assert "kant" in reg.theme_keys()

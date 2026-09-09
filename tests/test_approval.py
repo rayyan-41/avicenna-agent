@@ -66,7 +66,7 @@ def _make_script(headings: list[str] | None = None):
         prompt = messages[-1].content if messages else ""
         if "pre-flight plan" in prompt or "JSON fence" in prompt:
             return Completion(text=_declaration(headings))
-        if "TAGS:" in prompt:
+        if "labelled slots" in prompt:
             return Completion(text="Reviewed the note.\nTAGS: general, cli")
         if "genuinely related" in prompt:
             note = prompt.split("\n\n", 1)[-1]

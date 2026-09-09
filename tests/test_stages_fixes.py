@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from avicenna.bus import EventBus, drain
-from avicenna.events import Event, LogMessage
+from avicenna.events import Event, LogMessage, TagsAssignedMechanically
 from avicenna.pipeline.run import execute_run
 from avicenna.pipeline.stages import _canonical_domain_dir
 from avicenna.providers.base import Completion
@@ -49,7 +49,7 @@ def _script(system: str, messages: list[Any]) -> Completion:
     prompt = messages[-1].content if messages else ""
     if "pre-flight plan" in prompt or "JSON fence" in prompt:
         return Completion(text=_declaration())
-    if "TAGS:" in prompt:
+    if "labelled slots" in prompt:
         return Completion(text="Reviewed the note.\nTAGS: philosophy, epistemology, revelation")
     if "formatting corrected" in prompt:
         return Completion(text=prompt.split("\n\n", 1)[-1])
@@ -221,7 +221,7 @@ async def test_tagger_garbage_yields_nonempty_valid_tags(tmp_path: Path) -> None
 
     def garbage_tagger(system: str, messages: list[Any]) -> Completion:
         prompt = messages[-1].content if messages else ""
-        if "Reply with the tags" in prompt:
+        if "labelled slots" in prompt:
             tagger_calls.append(prompt)
             return Completion(text="Here are my thoughts on this note.")
         return _script(system, messages)
@@ -237,11 +237,11 @@ async def test_tagger_garbage_yields_nonempty_valid_tags(tmp_path: Path) -> None
     assert any(
         t in frontmatter for t in ("note", "essay")
     ), f"floor must include a type: {frontmatter}"
-    warnings = [
-        e.text for e in events
-        if isinstance(e, LogMessage) and "TAGGER_UNRESOLVED" in e.text
+    mechanical = [
+        e for e in events if isinstance(e, TagsAssignedMechanically)
     ]
-    assert any("assigned mechanically" in w for w in warnings), "floor warning must be emitted"
+    assert mechanical, "TagsAssignedMechanically event must be emitted"
+    assert len(mechanical[0].tags) >= 2, "floor must have at least 2 tags"
 
 
 async def test_floor_array_satisfies_positional_rules(tmp_path: Path) -> None:
@@ -250,7 +250,7 @@ async def test_floor_array_satisfies_positional_rules(tmp_path: Path) -> None:
 
     def garbage_tagger(system: str, messages: list[Any]) -> Completion:
         prompt = messages[-1].content if messages else ""
-        if "Reply with the tags" in prompt:
+        if "labelled slots" in prompt:
             tagger_calls.append(prompt)
             return Completion(text="I cannot determine the tags.")
         return _script(system, messages)
@@ -322,7 +322,7 @@ async def test_constrained_retry_injects_taxonomy_options(tmp_path: Path) -> Non
         if "Assemble this into one continuous note" in prompt:
             return Completion(text=prompt.split("\n\nTopic:")[0])
         # Tagger: detect by the tagger's unique prompt opening
-        if "Reply with the tags" in prompt:
+        if "labelled slots" in prompt:
             call_count += 1
             prompts.append(prompt)
             if call_count < 3:
