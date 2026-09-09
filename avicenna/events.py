@@ -196,13 +196,63 @@ class TransitionsApplied(Event):
     dropped: int = 0
 
 
+@dataclass(frozen=True)
+class SemanticGuardDecision(Event):
+    """One verdict from the drift guard, whichever way it went.
+
+    Reuse and mint are the same decision seen from two sides, so they share an
+    event: what matters to a reader is the *margin*, not the outcome.  The
+    design's own worked example is ``minted `nationalism`; closest existing
+    `political-philosophy` at 0.61`` — unreadable without ``nearest``, and
+    undiagnosable without ``threshold``, since a registry fragmenting into
+    synonyms and one collapsing distinct ideas are both threshold faults and
+    look identical from the mint count alone.
+    """
+
+    kind: Literal["theme", "type"] = "theme"
+    proposed: str = ""
+    decision: Literal["reuse", "mint"] = "mint"
+    nearest: str = ""
+    similarity: float = 0.0
+    threshold: float = 0.0
+
+
+@dataclass(frozen=True)
+class EntitiesDerived(Event):
+    """Where the note's entity tags came from.
+
+    Entities carry connection in this vault, so a note that has none is
+    disconnected no matter how well it is written.  When the tagger proposes
+    none and the harness derives them from the topic instead, that is a
+    decision the reader should see rather than a silence.
+    """
+
+    source: Literal["model", "topic", "none"] = "model"
+    entities: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class TagsAssignedMechanically(Event):
+    """The deterministic floor fired: no model-proposed array survived.
+
+    This was a ``LogMessage`` warning, which put it in the same channel as
+    everything else the run says.  It is a decision — the note is tagged, but
+    by the taxonomy rather than by a reading of the note — and it is the
+    strongest signal that a note wants correcting by hand.
+    """
+
+    tags: tuple[str, ...] = ()
+    reason: str = ""
+
+
 __all__ = [
     "Stage", "Event", "RunStarted", "PreflightDeclared", "ManifestWritten",
     "SectionStarted", "SectionCompleted", "SectionFailed", "StageEntered",
     "StageCompleted", "ToolInvoked", "ToolReturned", "WordCountChecked",
     "MarkdownNormalised",
     "TagsProposed", "TagsValidated", "SchemaDetected", "ThemeMinted",
-    "TransitionsApplied",
+    "TransitionsApplied", "SemanticGuardDecision", "EntitiesDerived",
+    "TagsAssignedMechanically",
     "MocUpdated", "NoteWritten", "PlanApprovalRequested", "RunFailed",
     "RunComplete", "LogMessage",
 ]

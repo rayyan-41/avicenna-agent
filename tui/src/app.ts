@@ -1027,6 +1027,42 @@ export class App {
         );
         return;
 
+      case 'SemanticGuardDecision': {
+        const sim = num('similarity');
+        const near = str('nearest');
+        // The margin is the point, so it is stated even when nothing was near:
+        // an empty `nearest` means the registry had nothing to compare against,
+        // which is a different fact from a distant nearest neighbour.
+        const margin = near
+          ? `closest existing ${near} at ${sim.toFixed(2)} (threshold ${num('threshold').toFixed(2)})`
+          : 'no existing entry to compare against';
+        this.write(
+          str('decision') === 'reuse'
+            ? `reused ${str('kind')} ${str('nearest')} for proposed ${str('proposed')} at ${sim.toFixed(2)}`
+            : `minted ${str('kind')} ${str('proposed')}; ${margin}`,
+        );
+        return;
+      }
+
+      case 'EntitiesDerived': {
+        const entities = list('entities');
+        const source = str('source');
+        this.write(
+          source === 'none'
+            ? 'no entity tags: this note is not connected to any figure or work'
+            : source === 'topic'
+              ? `entities derived from the topic: ${entities.join(', ')}`
+              : `entities proposed by the tagger: ${entities.join(', ')}`,
+        );
+        return;
+      }
+
+      case 'TagsAssignedMechanically':
+        this.write(
+          `tags assigned mechanically (${str('reason')}): ${list('tags').join(', ')} — correct this note`,
+        );
+        return;
+
       case 'MocUpdated':
         this.write(`MOC updated: ${str('result')}`);
         return;
