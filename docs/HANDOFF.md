@@ -229,8 +229,14 @@ convenient locally. `python -m pytest` and `pytest` are not the same command.
   proliferation in the taxonomy.
 - **Vault sovereignty / emergent taxonomy.** Designed but unbuilt —
   `docs/superpowers/specs/2026-09-07-vault-sovereignty-and-emergent-taxonomy-design.md`.
-- **The terminal interface.** Designed but unbuilt —
-  `docs/superpowers/specs/2026-09-07-terminal-interface-design.md`. Read the
+- **The terminal interface.** Being redesigned, and the design is unfinished.
+  `docs/superpowers/specs/2026-09-09-conversational-terminal-interface-design.md`
+  is the current document — section 1 of four is approved, sections 2 to 4 are
+  not written. It supersedes
+  `docs/superpowers/specs/2026-09-07-terminal-interface-design.md` on the
+  question of whether there is a chat surface (there now is), and that older
+  spec is still the authority on everything about the run display. No frontend
+  code is written until the new spec is approved in full. Read the
   frontend-skeleton section of CLAUDE.md before touching `tui/`.
 - **A live run against the new weaver.** The transition weaver has never been
   exercised against a real API — every test injects a `FakeProvider`, and that
@@ -238,7 +244,9 @@ convenient locally. `python -m pytest` and `pytest` are not the same command.
 - **Bridge plan approval.** The bridge auto-approves every plan. A real
   approve/decline needs a response path in the wire protocol, which is a
   protocol change rather than a pipeline one. `PlanApprovalRequested` already
-  carries everything the frontend would need.
+  carries everything the frontend would need. The 2026-09-09 interface spec
+  designs that path as `run.approve` and treats this bullet as the stub it
+  closes.
 - **The tagger files people as themes.** The live run tagged a person as a
   *theme* rather than an *entity*, and coined `optic` as a singular of "optics".
   Since connection in this vault is carried by entity tags, that is a miss in
@@ -428,9 +436,10 @@ So: **the vault owns structure** and **the harness owns generation and cohesion
 only**. `taxonomy.json` inverts from a declared input into a harness-maintained
 registry. Design in
 `docs/superpowers/specs/2026-09-07-vault-sovereignty-and-emergent-taxonomy-design.md`.
-The terminal interface is designed but unbuilt —
-`docs/superpowers/specs/2026-09-07-terminal-interface-design.md`, and see the
-frontend-skeleton section of CLAUDE.md before touching `tui/`.
+The terminal interface is mid-redesign, not merely unbuilt — read
+`docs/superpowers/specs/2026-09-09-conversational-terminal-interface-design.md`
+before the 2026-09-07 one, and see the frontend-skeleton section of CLAUDE.md
+before touching `tui/`.
 
 ---
 
