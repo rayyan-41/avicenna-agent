@@ -100,6 +100,86 @@ def route_cmd(
         typer.echo(f"  {s_}")
 
 
+@app.command("entities")
+def entities_cmd(
+    vault: Optional[Path] = typer.Option(None, "--vault"),
+    write: bool = typer.Option(
+        False, "--write",
+        help="Record the entities in taxonomy.json. Without this, nothing is written.",
+    ),
+) -> None:
+    """Read the entity vocabulary this vault already uses, and record it.
+
+    Entities carry connection here, and until they are recorded the harness
+    cannot know that this vault writes `galileo-galilei` rather than `galilei`
+    -- so a note tagged with the derived form never joins the one that exists.
+    This reads the forms back out of note frontmatter, once.
+
+    It is a record, never a constraint: the entity slot is an open vocabulary
+    by contract, and `validate_tags.ps1` classifies a tail tag as an entity by
+    exclusion from themes without ever reading this key.
+
+    Dry by default, because it writes to the user's source of truth.
+    """
+    import json
+
+    from avicenna.vault.context import VaultContext
+    from avicenna.vault.entities import scan_vault_entities
+    from avicenna.vault.registry import ThemeRegistry
+
+    ctx = VaultContext.detect(explicit=vault)
+    if not ctx.found:
+        typer.echo("No vault found. Run `avicenna init` or pass --vault.", err=True)
+        raise typer.Exit(1)
+    taxonomy_path = ctx.root / ".agents" / "taxonomy.json"
+    if not taxonomy_path.is_file():
+        typer.echo(f"No taxonomy at {taxonomy_path}", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"[{ctx.badge}] {ctx.summary}")
+    try:
+        raw = json.loads(taxonomy_path.read_text("utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        typer.echo(f"Could not read taxonomy: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+    counts = scan_vault_entities(ctx.root, themes=raw.get("themes", []))
+    recorded = set(raw.get("entities", []))
+    new = {k: v for k, v in counts.items() if k not in recorded}
+
+    typer.echo("")
+    typer.echo(f"  in notes:      {len(counts)}")
+    typer.echo(f"  in taxonomy:   {len(recorded)}")
+    typer.echo(f"  unrecorded:    {len(new)}")
+
+    if not new:
+        typer.echo("")
+        typer.echo("Nothing to record.")
+        return
+
+    typer.echo("")
+    for name, n in sorted(new.items(), key=lambda kv: (-kv[1], kv[0])):
+        typer.echo(f"  {n:3}  {name}")
+
+    if not write:
+        typer.echo("")
+        typer.echo("Dry run. Pass --write to record these in taxonomy.json.")
+        return
+
+    registry = ThemeRegistry.load(taxonomy_path)
+    minted = 0
+    for name in sorted(new):
+        _, is_new = registry.resolve_entity(name)
+        minted += int(is_new)
+    ok = registry.persist()
+    typer.echo("")
+    if ok:
+        typer.echo(f"Recorded {minted} entities in {taxonomy_path}.")
+    else:
+        typer.echo(f"Could not write {taxonomy_path}.", err=True)
+        raise typer.Exit(1)
+
+
 @app.command("note")
 def note_cmd(
     topic: str = typer.Argument(..., help="Topic for the note"),

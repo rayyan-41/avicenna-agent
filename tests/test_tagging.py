@@ -318,15 +318,13 @@ class TestDeriveEntities:
     def test_multi_word_galileo_galilei(self) -> None:
         """Two-word name without a particle: last token as surname.
 
-        KNOWN DIVERGENCE, asserted deliberately so it is visible rather than
-        forgotten: the vault holds `galileo-galilei` in full, and this derives
-        `galilei`, so a derived tag will not join that note.  Nothing in the
-        string separates this case from `David Hume` -> `hume`; the full form
-        there is a human refinement.  taxonomy.json records themes and types
-        but not entities, so there is no cheap house-form record to check
-        against.  Reconciling a derived entity against one the vault already
-        uses is the same reuse-above-threshold problem the drift guard solves
-        for themes, and it should reuse that oracle.
+        The vault writes `galileo-galilei` in full, and derivation cannot know
+        that -- nothing in the string separates this case from `David Hume` ->
+        `hume`.  Deriving the surname here is correct and deliberate: the house
+        form is reconciled afterwards by `ThemeRegistry.resolve_entity`, which
+        has the vault's recorded entities to consult, and is covered in
+        tests/test_entities.py. Keeping the two apart is what lets this
+        function stay a pure string transform.
         """
         assert derive_entities("Galileo Galilei and the telescope") == ["galilei"]
 

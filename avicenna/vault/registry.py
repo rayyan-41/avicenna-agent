@@ -190,6 +190,92 @@ def _find_object_end(text: str, start: int) -> int:
     return -1
 
 
+def _create_array_after(
+    text: str,
+    key: str,
+    anchor_key: str,
+    items: list[str],
+) -> str | None:
+    """Insert a new top-level array *key* just after the *anchor_key* array.
+
+    Used when a vault predates the key entirely.  The alternative -- letting
+    the append fail and reserialising -- rewrites every inline array in the
+    user's hand-authored file, which is exactly the damage the surgical writer
+    was built to stop.
+
+    Indentation and the multiline/inline style are copied from the anchor, so
+    the new key looks like it was always there.  Returns ``None`` when the
+    anchor cannot be located, which sends the caller to the fallback.
+    """
+    colon = _find_json_colon(text, anchor_key)
+    if colon == -1:
+        return None
+    bracket = text.find("[", colon + 1)
+    if bracket == -1:
+        return None
+
+    depth = 0
+    in_str = False
+    end = -1
+    i = bracket
+    while i < len(text):
+        c = text[i]
+        if in_str:
+            if c == "\\":
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+        elif c == "[":
+            depth += 1
+        elif c == "]":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+        i += 1
+    if end == -1:
+        return None
+
+    # The anchor's own indentation is the indentation of the line it starts on.
+    line_start = text.rfind("\n", 0, colon) + 1
+    key_indent = ""
+    for ch in text[line_start:]:
+        if ch in " \t":
+            key_indent += ch
+        else:
+            break
+
+    body = text[bracket:end + 1]
+    if "\n" in body:
+        item_indent = key_indent + "  "
+        rendered = (
+            "[\n"
+            + ",\n".join(f'{item_indent}"{it}"' for it in items)
+            + f"\n{key_indent}]"
+        )
+    else:
+        rendered = "[" + ", ".join(f'"{it}"' for it in items) + "]"
+
+    # Insert after the anchor array and its comma, keeping the file valid.
+    insert_at = end + 1
+    trailing = text[insert_at:insert_at + 1]
+    prefix = "" if trailing == "," else ","
+    if trailing == ",":
+        insert_at += 1
+    return (
+        text[:insert_at]
+        + prefix
+        + f'\n{key_indent}"{key}": {rendered}'
+        + ("," if trailing == "," else "")
+        + text[insert_at:]
+    )
+
+
 def _append_to_array(
     text: str,
     key: str,
@@ -394,9 +480,11 @@ class ThemeRegistry:
     raw: dict[str, Any] = field(default_factory=dict)
     _theme_canonical: dict[str, str] = field(default_factory=dict)
     _type_canonical: dict[str, str] = field(default_factory=dict)
+    _entity_canonical: dict[str, str] = field(default_factory=dict)
     #: Newly minted keys in this run, not yet persisted.
     _minted_themes: list[str] = field(default_factory=list)
     _minted_types: list[str] = field(default_factory=list)
+    _minted_entities: list[str] = field(default_factory=list)
     _dirty: bool = False
     #: Precomputed drift-guard decisions for this registry, keyed by
     #: ``(normalized_key, kind)``.  ``None`` means no oracle ran and the pure
@@ -424,6 +512,16 @@ class ThemeRegistry:
             nk = _normalize(t)
             if nk not in self._type_canonical:
                 self._type_canonical[nk] = t
+        # Entities are an open vocabulary, so this is a *record* of the forms
+        # this vault already uses -- never a list to validate against.  The
+        # vault's own validate_tags.ps1 classifies a tail tag as an entity by
+        # exclusion (`$themes -notcontains $_`) and never reads this key, so
+        # recording entities here cannot start gatekeeping them.
+        self._entity_canonical = {}
+        for t in self.raw.get("entities", []):
+            nk = _normalize(t)
+            if nk not in self._entity_canonical:
+                self._entity_canonical[nk] = t
 
     # --- the drift guard seam ------------------------------------------------
     # Embedding is async; `resolve_theme` and `resolve_type` are not, and they
@@ -618,6 +716,62 @@ class ThemeRegistry:
         self._mint(tag_key, self._type_canonical, "types", self._minted_types)
         return tag_key, True
 
+    def entity_keys(self) -> list[str]:
+        """Normalized keys currently in the entity record."""
+        return list(self._entity_canonical)
+
+    def _reconcile_surname(self, nk: str) -> str | None:
+        """Return the entity this one already exists as, under another form.
+
+        Derivation yields ``galilei`` from "Galileo Galilei" while the vault
+        holds ``galileo-galilei``; a model may propose ``immanuel-kant`` where
+        the vault holds ``kant``.  Both are the same person under two forms,
+        and without this they become two entity tags and the note fails to
+        join the one that already exists -- which is the whole point of an
+        entity tag.
+
+        The match is on the last segment, and **only when one side is a single
+        token**.  That restriction is what keeps ``john-mill`` and
+        ``james-mill`` apart: two multi-token names sharing a surname are
+        ordinarily two different people, while a bare surname beside a full
+        name is ordinarily one.  An ambiguous bare surname -- ``mill`` when
+        both Mills are on record -- matches nothing and stands on its own,
+        because guessing which is meant is worse than leaving it.
+        """
+        parts = nk.split()
+        candidates: list[str] = []
+        for existing_nk, canonical in self._entity_canonical.items():
+            other = existing_nk.split()
+            # Exactly one side must be a bare surname.
+            if (len(parts) == 1) == (len(other) == 1):
+                continue
+            if parts[-1] == other[-1]:
+                candidates.append(canonical)
+        if len(candidates) == 1:
+            return candidates[0]
+        return None
+
+    def resolve_entity(self, proposed: str) -> tuple[str, bool]:
+        """Resolve *proposed* against the entity record.
+
+        Returns ``(canonical_form, is_new)``.  Unlike themes and types this is
+        never a constraint: an unrecognised entity is always accepted, and the
+        only question is whether the vault already writes it another way.
+        """
+        if self._validate_raw(proposed) is not None:
+            return proposed, False
+        nk = _normalize(proposed)
+        tag_key = nk.replace(" ", "-")
+        if self._validate_tag(tag_key) is not None:
+            return proposed, False
+        if nk in self._entity_canonical:
+            return self._entity_canonical[nk], False
+        reconciled = self._reconcile_surname(nk)
+        if reconciled is not None:
+            return reconciled, False
+        self._mint(tag_key, self._entity_canonical, "entities", self._minted_entities)
+        return tag_key, True
+
     def lookup_theme(self, proposed: str) -> tuple[str | None, str | None]:
         """Read-only check against the theme registry.
 
@@ -669,6 +823,9 @@ class ThemeRegistry:
         type_counts: dict[str, int] = self.raw.setdefault("_typeCounts", {})
         for t in self._minted_types:
             type_counts[t] = type_counts.get(t, 0) + 1
+        entity_counts: dict[str, int] = self.raw.setdefault("_entityCounts", {})
+        for t in self._minted_entities:
+            entity_counts[t] = entity_counts.get(t, 0) + 1
 
         tmp = self.taxonomy_path.with_suffix(".json.part")
         try:
@@ -696,10 +853,27 @@ class ThemeRegistry:
             mutations.append(("themes", "_themeCounts", self._minted_themes))
         if self._minted_types:
             mutations.append(("types", "_typeCounts", self._minted_types))
+        if self._minted_entities:
+            mutations.append(("entities", "_entityCounts", self._minted_entities))
 
         # Apply mutations sequentially — each sees the text produced by the
         # previous one, so offsets stay valid.
         for array_key, counts_key, items in mutations:
+            if _find_json_colon(text, array_key) == -1:
+                # A vault written before this key existed.  Creating it in
+                # place keeps the surgical guarantee; falling through to
+                # _append_to_array would return None and reserialise the whole
+                # document, which is the 118-line diff this writer exists to
+                # prevent.
+                created = _create_array_after(text, array_key, "themes", items)
+                if created is None:
+                    return False
+                text = created
+                new_text = _set_key_in_object(text, counts_key, items)
+                if new_text is None:
+                    return False
+                text = new_text
+                continue
             new_text = _append_to_array(text, array_key, items)
             if new_text is None:
                 return False

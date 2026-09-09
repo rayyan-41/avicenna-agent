@@ -1013,9 +1013,11 @@ export class App {
       case 'ThemeMinted': {
         const minted = list('minted');
         const kind = str('kind');
+        // 'entity' does not pluralise by appending 's'.
+        const plural = kind === 'entity' ? 'entities' : `${kind}s`;
         this.write(
-          `${minted.length} new ${kind}${minted.length !== 1 ? 's' : ''} minted: ` +
-            `${minted.join(', ')} (registry: ${num('registry_size')} ${kind}s)`,
+          `${minted.length} new ${minted.length === 1 ? kind : plural} minted: ` +
+            `${minted.join(', ')} (registry: ${num('registry_size')} ${plural})`,
         );
         return;
       }

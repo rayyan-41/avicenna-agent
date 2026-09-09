@@ -184,7 +184,10 @@ class LogMessage(Event):
 
 @dataclass(frozen=True)
 class ThemeMinted(Event):
-    kind: Literal["theme", "type"] = "theme"
+    #: Entities joined themes and types once the taxonomy began recording them.
+    #: This adds no event name, so protocol parity is unaffected, but the
+    #: frontend must not pluralise the kind by appending "s".
+    kind: Literal["theme", "type", "entity"] = "theme"
     minted: tuple[str, ...] = ()
     registry_size: int = 0
 

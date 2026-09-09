@@ -163,14 +163,17 @@ def parse_tagger_reply(output: str) -> ParsedTags:
 # ``euclid``, ``euler``, ``gauss`` -- while the full form survives where a
 # particle makes it the customary name: ``al-ghazali``, ``ibn-sina``.
 #
-# KNOWN DIVERGENCE, recorded rather than papered over: the vault also holds
-# ``galileo-galilei`` in full, and this derives ``galilei``.  Nothing in the
-# string distinguishes that case from ``David Hume`` -> ``hume``; the full form
-# there is a human refinement, and taxonomy.json records themes and types but
-# NOT entities, so the harness has no cheap record of the house form to check
-# against.  Reconciling a derived entity with one the vault already uses is the
-# same reuse-above-threshold problem the drift guard now solves for themes, and
-# it should reuse that oracle rather than grow a second heuristic here.
+# Derivation deliberately stops at the surname, and does NOT try to guess the
+# house form.  It cannot: the vault holds ``galileo-galilei`` in full, and
+# nothing in the string distinguishes that from ``David Hume`` -> ``hume``.
+#
+# That is no longer a dead end.  The taxonomy now records the entity forms the
+# vault actually uses, and ``ThemeRegistry.resolve_entity`` reconciles a bare
+# surname with a recorded full name in either direction, so a note deriving
+# ``galilei`` is tagged ``galileo-galilei`` and joins the note that already
+# exists.  Keeping that knowledge in the registry rather than here is the point:
+# this function stays a pure string transform with no vault to consult, and the
+# vocabulary lives with the vault that owns it.
 #
 # PRECISION OVER RECALL.  Derivation is a fallback, and the two errors are not
 # symmetric: a missing entity leaves a note where it already was, while a wrong

@@ -1580,16 +1580,22 @@ async def _resolve_tags_against_registry(
     # called `all_entities` while containing no entities at all, which is how
     # entity tags came to be minted as themes: `kant` is not a domain, category
     # or marker, so it fell through to the theme registry, failed the lookup,
-    # and was minted.  Entities have to be declared by the caller because they
-    # are an open vocabulary -- there is no closed set to recognise them by.
-    passthrough = known_domains | all_categories | markers | {
-        e.strip() for e in entities if e.strip()
-    }
+    # and was minted.
+    passthrough = known_domains | all_categories | markers
+
+    # Entities are resolved, not passed through.  They still must never touch
+    # the theme registry, but the vault records the form it already uses for a
+    # figure, and a note tagged `galilei` does not join one tagged
+    # `galileo-galilei`.  The caller declares them because they are an open
+    # vocabulary: unlike domains, categories and markers there is no closed set
+    # to recognise `kant` by.
+    entity_set = {e.strip() for e in entities if e.strip()}
 
     raw_tags = [t.strip() for t in tag_line.split(",") if t.strip()]
     resolved: list[str] = []
     new_themes: list[str] = []
     new_types: list[str] = []
+    new_entities: list[str] = []
     rejected: list[str] = []
 
     # --- semantic drift guard ------------------------------------------------
@@ -1601,7 +1607,7 @@ async def _resolve_tags_against_registry(
     # validation rules to work it out.
     guard_candidates: list[tuple[str, str]] = []  # (normalized key, context)
     for tag in raw_tags:
-        if tag in passthrough:
+        if tag in passthrough or tag in entity_set:
             continue
         nk = registry.guard_candidate(tag)
         if nk is not None:
@@ -1702,6 +1708,16 @@ async def _resolve_tags_against_registry(
             if tag in passthrough:
                 resolved.append(tag)
                 continue
+            if tag in entity_set:
+                # Never the theme registry -- the entity record, which is a
+                # record rather than a constraint: an unrecognised entity is
+                # always accepted, and the only question is whether this vault
+                # already writes the same figure another way.
+                entity_form, is_new = registry.resolve_entity(tag)
+                resolved.append(entity_form)
+                if is_new:
+                    new_entities.append(entity_form)
+                continue
             # Decide BEFORE mutating: look the tag up in themes, then types,
             # then mint only if it is in neither.  No mint-then-undo.
             canon, reason = registry.lookup_theme(tag)
@@ -1728,6 +1744,12 @@ async def _resolve_tags_against_registry(
             registry.mint_theme(tag_key)
             new_themes.append(tag_key)
             resolved.append(tag_key)
+
+    if new_entities:
+        await ctx.emit(
+            ThemeMinted, kind="entity", minted=tuple(new_entities),
+            registry_size=len(registry.entity_keys()),
+        )
 
     if rejected:
         await ctx.emit(
