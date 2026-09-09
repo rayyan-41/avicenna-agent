@@ -1065,6 +1065,18 @@ export class App {
         );
         return;
 
+      case 'NotesLinked': {
+        const inline = num('inline');
+        const related = num('related');
+        const targets = list('targets');
+        this.write(
+          `linked: ${inline} inline entity link${inline === 1 ? '' : 's'}, ` +
+            `${related} related note${related === 1 ? '' : 's'}` +
+            (targets.length > 0 ? ` — ${targets.join(', ')}` : ''),
+        );
+        return;
+      }
+
       case 'MocUpdated':
         this.write(`MOC updated: ${str('result')}`);
         return;

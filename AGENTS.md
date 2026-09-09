@@ -72,10 +72,20 @@ vault, that has:
 - **A place in the graph.** The domain's Map of Content is updated, so the note
   is reachable rather than orphaned.
 
+- **Links to the notes it belongs beside.** Notes sharing enough tags are
+  listed under Related Notes, by the vault's own link policy; and where the
+  note names an entity that already has a note of its own, the first mention
+  of it becomes a link.
+
 The deliverable is not the text. **The deliverable is a note that is connected
-to the rest of your thinking.** Connection is carried by entity tags from a
-closed taxonomy and the Map of Content — not by wikilinks. A brilliant note
-that is not tagged and not entered into its MOC is a failure of this program.
+to the rest of your thinking.** A brilliant note that is not tagged and not
+entered into its MOC is a failure of this program.
+
+Connection is carried by tags and the Map of Content first, and by links
+second — and every link is *derived* from the tags rather than composed. No
+model is asked where a link belongs, because the one that was asked invented
+targets that did not exist. Both mechanisms are pure functions over the tag
+array and the vault's own file listing (§2.7).
 
 ### What Avicenna is not
 
@@ -205,6 +215,36 @@ why adding an event to `events.py` surfaces it on the wire with no bridge
 change: the serialiser is structural — the class name becomes `event`, the
 fields become `data`.
 
+### 2.7 Links are derived, never authored
+
+Avicenna once had a linker that handed the finished note to a model and asked
+it where links belonged. It invented notes that did not exist, wrapped the
+note's own headings in brackets eight times in one run, and needed a resolver
+downstream whose only job was cleaning up after it. It was removed.
+
+The lesson recorded at the time was "no wikilinks", and that was the wrong
+lesson — the defect was not the link, it was the model deciding where one goes.
+Linking came back as two pure functions over data the vault already holds
+(`avicenna/pipeline/linking.py`):
+
+- **Related Notes.** The vault's own `get_related_notes.ps1` decides which
+  notes qualify — two or more shared core tags is a primary match, one plus the
+  same category is secondary. The harness renders the answer; it does not
+  reimplement the policy, for the same reason `validate_tags` is authoritative
+  about tag correctness.
+- **Inline entity links.** Where an entity in the note's own tag array already
+  has a note filed under that name, the first mention of it in the prose
+  becomes a link. First mention only: forty links to one note reads as a link
+  farm and connects no better than one.
+
+Neither can invent a target. Every link names either a filename read off disk
+in that stage or a path the vault script returned. Where a name is ambiguous —
+two Mills on file and a bare `mill` in the tags — nothing is linked, because a
+link to the wrong person is a claim the note did not make.
+
+If linking is ever asked to get smarter, the direction is *more deterministic*,
+never *ask a model*.
+
 ---
 
 ## 3. Anatomy of a run
@@ -216,12 +256,15 @@ topic
   |- Pre-flight ...... the agent declares template, headings, target words, slug
   |- Manifest ........ write_manifest.ps1 -> MANIFEST_WRITTEN, resume state
   |- Sections ........ N parallel one_shot() calls, one per heading, fresh each
-  |- Assembly ........ verify_chunks -> ALL_PRESENT, then @weaver, then atomic write
+  |- Assembly ........ verify_chunks -> ALL_PRESENT, then atomic write
+  |- Transitions ..... @weaver writes joins only; the body never round-trips
   |- Word count ...... validate_wordcount -> PASS / FAIL (warns, never blocks)
-  |- TOC ............. generate_toc.ps1
   |- Tagging ......... @tagger proposes -> validate_tags gates -> up to 3 attempts
-  |- Formatting ...... @formatter applies the declared template
-  \- MOC ............. update_moc.ps1 puts the note in the domain's index
+  |                    -> tags written into the note's frontmatter
+  |- Formatting ...... deterministic Python: numbering, heading cleanup, TOC
+  |- Linking ......... get_related_notes -> Related Notes; entity tags -> inline
+  |- MOC ............. update_moc.ps1 puts the note in the domain's index
+  \- Cleanup ......... _tmp artifacts deleted, last once the note is finished
 ```
 
 The parts that are easy to get wrong:
@@ -248,6 +291,14 @@ more useful than no note.
 note joins the graph or sits outside it. Three attempts, each fed the previous
 validation errors. If the vault has no `validate_tags` tool, the tagger is
 trusted and the event says so explicitly.
+
+**Linking** runs after formatting and before the MOC. After, because the TOC is
+generated from the numbered headings and a link inserted into a heading would
+break the anchor pointing at it; before, because both are connection work and
+the MOC is the coarser half. Both of its mechanisms are pure and neither asks a
+model anything (§2.7). It is idempotent: a resumed run strips the previous
+Related Notes section before writing one, or the note grows a second section
+per run.
 
 ---
 

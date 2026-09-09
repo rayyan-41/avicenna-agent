@@ -57,6 +57,7 @@ export type EventName =
   | 'SemanticGuardDecision'
   | 'EntitiesDerived'
   | 'TagsAssignedMechanically'
+  | 'NotesLinked'
   | 'MocUpdated'
   | 'NoteWritten'
   | 'PlanApprovalRequested'
@@ -72,6 +73,7 @@ export const STAGES = [
   'transitions',
   'wordcount',
   'tagging',
+  'linking',
   'moc',
   'write',
 ] as const;

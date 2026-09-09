@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 Stage = Literal[
     "preflight", "manifest", "sections", "assembly", "transitions",
-    "wordcount", "tagging", "moc", "write",
+    "wordcount", "tagging", "linking", "moc", "write",
 ]
 
 
@@ -145,6 +145,22 @@ class SchemaDetected(Event):
 class MocUpdated(Event):
     result: str = ""
     path: str = ""
+
+
+@dataclass(frozen=True)
+class NotesLinked(Event):
+    """What the note was connected to, and by which of the two mechanisms.
+
+    Reported separately because they fail separately: `related` comes from a
+    vault tool that may be absent, `inline` from entity tags that may name
+    nobody with a note of their own.  A run that produces zero of one and
+    several of the other is working correctly, and a single combined count
+    would hide which half did nothing.
+    """
+
+    inline: int = 0
+    related: int = 0
+    targets: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

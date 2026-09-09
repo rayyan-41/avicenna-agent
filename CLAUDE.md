@@ -20,13 +20,21 @@ epistemic gap and the necessity of revelation*, say — and it returns a
 long-form Markdown note in their Obsidian vault: structure declared up front,
 every heading written in a fresh context by a domain-specialist subagent, woven
 into continuous prose, tagged from a closed taxonomy, and entered into the
-domain's Map of Content. It is a harness for subagents and MCP tools, not a
-chatbot, and the point of the whole program is the *connection*: a brilliant
-note that is not tagged, not entered into its Map of Content, and not reachable
-from the rest of the vault is a failure. Connection is carried by entity tags
-from a closed taxonomy and the Map of Content — not by wikilinks. Do not
-reintroduce wikilink generation; interconnectivity in this vault is
-entity-driven.
+domain's Map of Content, and linked to the notes it belongs beside. It is a
+harness for subagents and MCP tools, not a chatbot, and the point of the whole
+program is the *connection*: a brilliant note that is not tagged, not entered
+into its Map of Content, and not reachable from the rest of the vault is a
+failure.
+
+Connection is carried by tags and the Map of Content first, and by links
+second. **Links are derived from tags, never written by a model.** The linker
+that asked a model where links belonged was removed for inventing targets, and
+the rule that came out of it is not "no links" but "no model-authored links":
+`avicenna/pipeline/linking.py` inserts a link only where the note's own entity
+tags name a note that exists on disk, and lists related notes only where the
+vault's own `get_related_notes.ps1` says the tag overlap meets its policy. If
+you are ever asked to make linking smarter, make it more deterministic — a
+model deciding where a link goes is the regression, not the link itself.
 
 ---
 
@@ -43,7 +51,11 @@ Three specific temptations, all of which look like optimisations and are not:
    fresh context each, deliberately (AGENTS.md §2.1). This descends from the
    project's origin — a Gemini CLI script that spawned a *separate headless
    process per heading* — and it is the reason a 10k-word note can hold ~1k
-   words per heading at constant quality. The session transcript is a log, not
+   words per heading at constant quality. The per-heading target is a setting
+   (`WORDS_PER_HEADING_DEFAULT`, 1500) and the section prompt states it as a
+   floor and a ceiling — 1000 to 2000 — because a single soft number was
+   reliably undershot; preflight is told the same band so it plans headings
+   broad enough to carry it. The session transcript is a log, not
    a conversation history: nothing in it is replayed to the model. A shared
    session degrades every section after roughly the third. Never "optimise"
    this.
@@ -63,6 +75,7 @@ Three specific temptations, all of which look like optimisations and are not:
 | A pipeline stage | `avicenna/pipeline/stages.py` |
 | Resume state (manifest + last-run pointer) | `avicenna/pipeline/resume.py` |
 | Parallel section generation | `avicenna/pipeline/sections.py` |
+| Related-notes and entity linking | `avicenna/pipeline/linking.py` (pure) + `LinkingStage` in `stages.py` |
 | Subagent invocation | `avicenna/pipeline/delegate.py` (it is `one_shot` + a system prompt) |
 | Which agent a topic routes to | `avicenna/vault/routing.py` |
 | Vault loading, agent/taxonomy validation | `avicenna/vault/vault.py`, `vault/models.py` |

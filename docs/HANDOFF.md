@@ -13,7 +13,26 @@ commits.** See "The build was lying".
 
 ---
 
-## Decision: linker stage dropped (2026-09-08)
+## Superseded: the linker is back, deterministically (2026-09-09)
+
+The decision recorded immediately below stood for a day and is now partly
+reversed by the user. Read it for the defect it describes — that is still the
+reason the model-driven linker is gone — but not for its conclusion.
+
+The conclusion drawn at the time was "no wikilinks". The user's instruction on
+2026-09-09 is that linking returns, in two deterministic forms: a Related Notes
+section built from tag overlap through the vault's own `get_related_notes.ps1`,
+and an inline link on the *first mention* of an entity that already has a note
+of its own. Both are pure functions in `avicenna/pipeline/linking.py`; a new
+`LinkingStage` sits between formatting and the MOC; the `"linking"` stage
+literal and a `NotesLinked` event came back with it. See AGENTS.md §2.7.
+
+What did not come back is a model deciding where a link goes. That was the
+actual defect, and the paragraph below is the evidence for it.
+
+---
+
+## Decision: linker stage dropped (2026-09-08) — superseded, see above
 
 The user was asked which of the three whole-note model round-trips (weaver,
 formatter, linker) should become deterministic, and chose: keep the weaver,

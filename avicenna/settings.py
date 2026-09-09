@@ -26,7 +26,14 @@ from avicenna.config import warn
 # Defaults
 # ---------------------------------------------------------------------------
 
-WORDS_PER_HEADING_DEFAULT: int = 1000
+# A section agent asked for "approximately 1000 words" reliably returned six or
+# seven hundred, and headings planned narrowly enough to have nothing left to
+# say at nine hundred made that worse.  Both halves are prompting problems, so
+# both are fixed by prompting: the target moved to the middle of the band the
+# user actually wants a heading to occupy, the section prompt now states that
+# band as a floor and a ceiling rather than a single soft number, and preflight
+# is told to plan headings broad enough to sustain it.
+WORDS_PER_HEADING_DEFAULT: int = 1500
 
 # Every concurrent section is a live API call against a rate-limited provider.
 # Six matches the comparable project the user pointed at; the upper bound is
@@ -152,6 +159,22 @@ def resolve_words_per_heading(
 
     # 4. Default
     return WORDS_PER_HEADING_DEFAULT
+
+
+def heading_word_band(target: int) -> tuple[int, int]:
+    """The acceptable word range for one heading, around *target*.
+
+    A single number reads to a model as a suggestion, and the suggestion is
+    always undershot.  A floor and a ceiling do not: the floor is a thing the
+    section can fail to reach, and saying so is what makes it hold.
+
+    The band is two-thirds to four-thirds of the target, rounded to fifty, so
+    the default 1500 yields 1000-2000 and any override the user sets scales
+    with it rather than dragging a hardcoded range out of alignment.
+    """
+    low = max(50, round(target * 2 / 3 / 50) * 50)
+    high = max(low + 50, round(target * 4 / 3 / 50) * 50)
+    return low, high
 
 
 def resolve_timeout(

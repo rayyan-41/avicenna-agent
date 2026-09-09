@@ -175,7 +175,8 @@ class TestFormPrompts:
     def test_table_prompt_differs_from_prose(self) -> None:
         prose = SECTION_PROMPT.format(
             topic="T", heading="H", index=1, total=3,
-            outline="1. H", words=1000, domain="general",
+            outline="1. H", words=1500, min_words=1000, max_words=2000,
+            domain="general",
         )
         table = prose.rstrip() + "\n" + _TABLE_SUFFIX
         assert table != prose
@@ -184,7 +185,8 @@ class TestFormPrompts:
     def test_mermaid_prompt_differs_from_prose(self) -> None:
         prose = SECTION_PROMPT.format(
             topic="T", heading="H", index=1, total=3,
-            outline="1. H", words=1000, domain="general",
+            outline="1. H", words=1500, min_words=1000, max_words=2000,
+            domain="general",
         )
         mermaid = prose.rstrip() + "\n" + _MERMAID_SUFFIX
         assert mermaid != prose

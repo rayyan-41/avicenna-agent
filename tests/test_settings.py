@@ -25,6 +25,7 @@ from avicenna.settings import (
     MAX_CONCURRENCY_MAX,
     MAX_CONCURRENCY_MIN,
     WORDS_PER_HEADING_DEFAULT,
+    heading_word_band,
     resolve_concurrency,
     resolve_timeout,
     resolve_words_per_heading,
@@ -116,13 +117,42 @@ def _note(vault: Vault) -> Path:
 # ============================================================================
 
 
+class TestHeadingWordBand:
+    """A floor and a ceiling, because a single number reads as a suggestion."""
+
+    def test_the_default_yields_the_band_the_user_asked_for(self) -> None:
+        assert heading_word_band(WORDS_PER_HEADING_DEFAULT) == (1000, 2000)
+
+    def test_it_scales_with_an_override(self) -> None:
+        """A user who sets 750 gets a band around 750, not the default's."""
+        assert heading_word_band(750) == (500, 1000)
+        assert heading_word_band(3000) == (2000, 4000)
+
+    def test_the_target_sits_inside_its_own_band(self) -> None:
+        for target in (300, 750, 1000, 1500, 2400, 5000):
+            low, high = heading_word_band(target)
+            assert low <= target <= high, target
+
+    def test_the_band_is_never_inverted_at_small_targets(self) -> None:
+        """A tiny target must not produce a ceiling below its floor."""
+        for target in (1, 10, 50, 74, 75):
+            low, high = heading_word_band(target)
+            assert 0 < low < high, target
+
+
 class TestWordCountGuidance:
     """The per-heading target is a setting, not a division."""
 
-    def test_default_is_1000(self) -> None:
-        """With no configuration anywhere, the default is 1000."""
+    def test_default_is_1500(self) -> None:
+        """With no configuration anywhere, the default is 1500.
+
+        It was 1000, and sections asked for "approximately 1000" came back at
+        six or seven hundred.  1500 is the middle of the 1000-2000 band a
+        heading is meant to occupy, so the floor stated in the prompt is a
+        number the model has room to clear.
+        """
         result = resolve_words_per_heading()
-        assert result == WORDS_PER_HEADING_DEFAULT == 1000
+        assert result == WORDS_PER_HEADING_DEFAULT == 1500
 
     def test_per_heading_target_is_independent_of_heading_count(self) -> None:
         """A 4-heading plan and a 40-heading plan send the SAME per-heading number.
@@ -133,7 +163,7 @@ class TestWordCountGuidance:
         """
         four_headings = resolve_words_per_heading()
         forty_headings = resolve_words_per_heading()
-        assert four_headings == forty_headings == 1000
+        assert four_headings == forty_headings == WORDS_PER_HEADING_DEFAULT
 
     def test_vault_scope_overrides_default(self, tmp_path: Path) -> None:
         vault_cfg = {"words_per_heading": 1500}
@@ -209,17 +239,20 @@ class TestWordCountGuidance:
             overrides={"words_per_heading": 750},
         ))
 
-        # Find the section-generation prompts (they contain "approximately").
-        section_prompts = [p for p in captured_prompts if "approximately" in p]
+        # Find the section-generation prompts (they state the word band).
+        section_prompts = [p for p in captured_prompts if "Aim for" in p]
         assert len(section_prompts) >= 1, "no section prompts captured"
         for sp in section_prompts:
-            assert "750 words" in sp, (
-                f"expected '750 words' in section prompt, got: "
-                f"{sp[sp.index('approximately'):sp.index('approximately')+50]}"
+            assert "Aim for 750" in sp, (
+                f"expected 'Aim for 750' in section prompt, got: "
+                f"{sp[sp.index('Aim for'):sp.index('Aim for') + 50]}"
             )
+            # The band scales with the override rather than staying pinned to
+            # the default's 1000-2000.
+            assert "between 500 and 1000 words" in sp
 
     def test_resolved_number_in_prompt_with_default(self, tmp_path: Path) -> None:
-        """With no overrides, the default 1000 appears in section prompts."""
+        """With no overrides, the default 1500 and its band reach the prompt."""
         vault = _scaffold(tmp_path)
         captured_prompts: list[str] = []
 
@@ -231,10 +264,14 @@ class TestWordCountGuidance:
         provider = FakeProvider(script=capturing_script)
         asyncio.run(execute_run(TOPIC, provider, vault, bus=EventBus(), concurrency=3))
 
-        section_prompts = [p for p in captured_prompts if "approximately" in p]
+        section_prompts = [p for p in captured_prompts if "Aim for" in p]
         assert len(section_prompts) >= 1
         for sp in section_prompts:
-            assert "1000 words" in sp
+            assert "Aim for 1500" in sp
+            assert "between 1000 and 2000 words" in sp
+            # A floor, not a suggestion: a single soft number is what the
+            # section agent was undershooting.
+            assert "under 1000 words is incomplete" in sp
 
 
 # ============================================================================

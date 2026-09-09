@@ -18,7 +18,11 @@ from avicenna.events import SectionCompleted, SectionFailed, SectionStarted
 from avicenna.pipeline.context import RunContext
 from avicenna.pipeline.delegate import tools_for_agent
 from avicenna.session import one_shot
-from avicenna.settings import load_vault_config, resolve_words_per_heading
+from avicenna.settings import (
+    heading_word_band,
+    load_vault_config,
+    resolve_words_per_heading,
+)
 
 SECTION_PROMPT = """You are writing ONE section of a longer note titled "{topic}".
 
@@ -28,8 +32,16 @@ Write the section under this heading, and only this heading:
 This is section {index} of {total}. The full outline, for orientation only, is:
 {outline}
 
+Length is a hard requirement, not a target to approach:
+- Write between {min_words} and {max_words} words of finished prose for this
+  heading alone. Aim for {words}.
+- A section under {min_words} words is incomplete and will be rejected. If you
+  find yourself running short, you have treated the heading too narrowly: go
+  further into the argument, the objections to it, the primary sources, the
+  historical circumstances and the positions it is answering.
+- Do not pad to reach the count. Reach it by saying more of substance.
+
 Rules:
-- Write approximately {words} words of finished prose for this heading alone.
 - Do NOT restate the heading; the assembler adds it.
 - Do NOT write a preamble, a table of contents, a summary of the whole note,
   or any transition into the next section.
@@ -112,10 +124,11 @@ def _build_task(
         overrides=spec.overrides,
         vault_config=vault_cfg,
     )
+    low, high = heading_word_band(wph)
     prompt = SECTION_PROMPT.format(
         topic=spec.topic, heading=heading, index=index, total=len(ctx.headings),
         outline=outline,
-        words=wph,
+        words=wph, min_words=low, max_words=high,
         domain=ctx.domain,
     )
     if form is not None:

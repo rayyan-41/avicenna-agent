@@ -11,10 +11,15 @@ from typing import Any
 
 from avicenna.events import (
     EntitiesDerived, LogMessage, ManifestWritten, MarkdownNormalised,
-    MocUpdated, NoteWritten, PlanApprovalRequested, PreflightDeclared,
-    SchemaDetected, Stage, TagsAssignedMechanically,
+    MocUpdated, NotesLinked, NoteWritten, PlanApprovalRequested,
+    PreflightDeclared, SchemaDetected, Stage, TagsAssignedMechanically,
     TagsProposed, TagsValidated, ThemeMinted, TransitionsApplied,
     WordCountChecked,
+)
+from avicenna.pipeline.linking import (
+    RelatedNote, append_section, link_first_mentions, parse_related_output,
+    render_related_section, resolve_entity_notes, strip_related_section,
+    subject_index,
 )
 from avicenna.pipeline.normalise import normalise_markdown
 from avicenna.pipeline.schema import FrontmatterSchema, detect_frontmatter_schema
@@ -29,9 +34,14 @@ from avicenna.pipeline.preflight import PreflightError, parse_preflight
 from avicenna.pipeline.stage import PipelineAbort, PipelineStage
 from avicenna.pipeline.sections import generate_sections
 from avicenna.pipeline.toolcall import invoke_tool
-from avicenna.settings import load_vault_config, resolve_words_per_heading
+from avicenna.settings import (
+    heading_word_band,
+    load_vault_config,
+    resolve_words_per_heading,
+)
 from avicenna.tools.base import ToolResult
 from avicenna.vault.routing import classify_domain, route_request, validate_domain
+from avicenna.vault.entities import entity_slice
 from avicenna.vault.registry import ThemeRegistry, _normalize as _normalize_tag
 from avicenna.vault.vault import Vault, tag_form
 
@@ -644,6 +654,19 @@ class PreflightStage(PipelineStage):
     async def run(self, ctx: RunContext) -> None:
         assert ctx.agent is not None
         assert ctx.domain is not None
+        # The heading list decides how long each section can be, so preflight
+        # has to know the band the sections will be written to.  It used to be
+        # told nothing, and planned twelve narrow headings for a note that
+        # wanted six broad ones — after which no section prompt could hold a
+        # thousand words, because the heading had run out of subject matter by
+        # then.  ctx.template is still unset here (this stage is what sets it),
+        # so a per-template override cannot apply; the CLI flag, env var and
+        # vault-wide setting all do.
+        wph = resolve_words_per_heading(
+            overrides=ctx.spec.overrides,
+            vault_config=load_vault_config(Path(ctx.spec.vault.root)),
+        )
+        low, high = heading_word_band(wph)
         prompt = (
             f"Topic: {ctx.spec.topic}\n"
             f"Domain: {ctx.domain}\n"
@@ -664,6 +687,15 @@ class PreflightStage(PipelineStage):
             "[Table] for a comparative table, [Mermaid Diagram] for a "
             "Mermaid diagram.  Example: "
             '"[Table] Comparative Matrix of Theological Positions".\n'
+            "\n"
+            f"Each heading will be written separately, at {low} to {high} words.\n"
+            "Plan the headings accordingly:\n"
+            f"- Every heading must be broad enough to carry {low} words of "
+            "substantive prose on its own. If a heading could be answered "
+            "thoroughly in three paragraphs, it is too narrow — fold it into "
+            "a neighbour.\n"
+            "- Prefer fewer, broader headings over many thin ones.\n"
+            f'- Set "target_words" to the heading count multiplied by {wph}.\n'
         )
         from avicenna.session import one_shot
         raw = await one_shot(
@@ -1912,11 +1944,17 @@ def _build_vault_notes_index(vault: Vault, exclude: Path | None = None) -> dict[
     """Build a case-insensitive index of note stems from the vault.
 
     Returns ``{lowercase_stem: display_name}`` for every ``.md`` file in the
-    vault (excluding ``.agents/`` and the file at *exclude*).
+    vault (excluding ``.agents/``, ``_tmp/`` and the file at *exclude*).
+
+    ``_tmp/`` is skipped because it holds this run's own section chunks, and
+    they are deleted by the last stage. Counting them as notes made a link to
+    a chunk filename "resolve", and gave the linker a subject index containing
+    the note it is currently writing, in pieces. The vault's own scripts skip
+    the same directory.
     """
     index: dict[str, str] = {}
     for p in vault.root.rglob("*.md"):
-        if ".agents" in p.parts:
+        if ".agents" in p.parts or "_tmp" in p.parts:
             continue
         if exclude is not None and p.resolve() == exclude.resolve():
             continue
@@ -1975,6 +2013,151 @@ async def _resolve_wikilinks(text: str, vault: Vault, note_path: Path, ctx: RunC
     await ctx.emit(LogMessage, level="info",
                    text=f"wikilink resolution: {resolved_count} resolved, {len(dropped)} dropped")
     return result
+
+
+class LinkingStage(PipelineStage):
+    """Connect the finished note to the notes it belongs beside.
+
+    Runs after the formatter so the table of contents is already built from the
+    numbered headings — a link inserted before that point could land inside a
+    heading and break the anchor the TOC generates. It runs before the MOC
+    stage because both are connection work and the MOC is the coarser of the
+    two: this is where a note joins its neighbours, the MOC is where it joins
+    its domain.
+
+    Two mechanisms, both deterministic, neither of them a model call:
+
+    * **Related Notes**, from the vault's own `get_related_notes.ps1`. The
+      link policy — two shared core tags, or one plus the same category — is
+      the vault's, and it is applied by the vault's script rather than
+      reimplemented here, for the same reason `validate_tags` is authoritative
+      over tag correctness.
+    * **Inline entity links**, on the first mention of any entity in the
+      note's own tags that already has a note of its own. A note on Kant that
+      mentions Rousseau reaches the Rousseau biography, if the vault has one.
+
+    Neither mechanism asks a model where a link belongs. The linker that did
+    was removed for inventing targets, and nothing here can invent one: every
+    link points at a filename that was read off disk in this stage.
+    """
+
+    name: Stage = "linking"
+    id = "linking"
+
+    async def should_run(self, ctx: RunContext) -> bool:
+        return ctx.note_path is not None and ctx.note_path.is_file()
+
+    async def run(self, ctx: RunContext) -> None:
+        assert ctx.note_path is not None
+        note = ctx.note_path.read_text(encoding="utf-8", errors="replace")
+        frontmatter, body = _split_frontmatter(note)
+
+        # A resumed run re-enters this stage on a note that may already carry
+        # the section. Removing it first is what keeps the stage idempotent;
+        # appending unconditionally grows a second one on every resume.
+        body = strip_related_section(body)
+
+        entities = _note_entities(ctx)
+
+        # --- inline entity links ---------------------------------------------
+        stems = _build_vault_notes_index(ctx.spec.vault, exclude=ctx.note_path).values()
+        targets = resolve_entity_notes(entities, subject_index(stems))
+        body, linked = link_first_mentions(body, targets)
+        if entities and not targets:
+            await ctx.emit(
+                LogMessage, level="info",
+                text=f"no vault note exists for any of: {', '.join(entities)}",
+            )
+
+        # --- related notes, by shared tags ------------------------------------
+        related = await self._related(ctx, entities, linked)
+        section = render_related_section(related, own_tags=ctx.tags)
+        body = append_section(body, section)
+
+        rendered = sum(1 for line in section.split("\n") if line.startswith("- [["))
+        if not linked and not rendered:
+            # Nothing to add. The stripped section is deliberately NOT written
+            # back: a vault that has lost its get_related_notes tool since the
+            # last run should not have its existing Related Notes deleted as a
+            # side effect of that.
+            await ctx.emit(NotesLinked, inline=0, related=0, targets=())
+            return
+
+        written = await _write_back(ctx, "linking", frontmatter + body)
+        if not written:
+            # The event reports what reached the note, not what was computed.
+            await ctx.emit(
+                LogMessage, level="warning",
+                text="linking rejected by the write-back guard; note unchanged",
+            )
+            await ctx.emit(NotesLinked, inline=0, related=0, targets=())
+            return
+        await ctx.emit(
+            NotesLinked,
+            inline=len(linked), related=rendered, targets=tuple(linked),
+        )
+
+    async def _related(
+        self, ctx: RunContext, entities: Sequence[str], already_linked: Sequence[str],
+    ) -> list[RelatedNote]:
+        """Ask the vault which notes share enough tags to be worth naming.
+
+        Core tags are the positional head (domain, category, type) plus the
+        themes; entities go in as supporting tags, where the script weights
+        them at half. That split is the script's own scoring model, not a
+        choice made here: core overlap is what decides the match tier, and a
+        shared entity is evidence about a note, not a claim that it is about
+        the same thing.
+
+        Notes already linked inline are excluded, so the section does not
+        repeat a connection the prose has already made.
+        """
+        assert ctx.note_path is not None
+        entity_set = set(entities)
+        core = [t for t in ctx.tags if t not in entity_set]
+        if not core:
+            return []
+        result = await _invoke_optional(
+            ctx, "get_related_notes",
+            NotePath=str(ctx.note_path),
+            CoreTags=", ".join(core),
+            SupportingTags=", ".join(entities),
+            ExcludedMentions=", ".join(already_linked),
+        )
+        if result is None:
+            return []
+        # The contract token decides whether there were candidates; the detail
+        # lines are only read once it says there were. Branching on the token
+        # rather than on whether the parse found rows is the same rule every
+        # other stage follows — the tool's declared outcome is authoritative,
+        # a regex over its prose is not.
+        if result.parsed is None or not result.parsed.ok:
+            return []
+        return parse_related_output(result.stdout)
+
+
+def _note_entities(ctx: RunContext) -> list[str]:
+    """The entity tags on this note, by the vault's own slot rule.
+
+    Taken from `entity_slice` rather than recomputed, so this agrees with
+    `validate_tags.ps1`: an entity is a tail tag that is not a theme. A vault
+    with no registry loaded yields nothing rather than guessing, because
+    without the theme vocabulary every theme would be read as an entity and
+    the note would try to link to notes named after its own subject matter.
+
+    The vocabulary is the taxonomy's themes as written, because those are the
+    forms the tags themselves carry. `theme_keys()` returns *normalised* keys
+    and using them here read `ethics` as an entity — `_normalize` singularises
+    it to `ethic`, which matches no tag — so every plural theme in the vault
+    became a name the linker went looking for a note about. Both forms are
+    accepted now, so neither spelling can slip through.
+    """
+    registry = ctx.theme_registry
+    if registry is None:
+        return []
+    vocabulary = list(registry.themes_for_hint()) + registry.theme_keys()
+    candidates = entity_slice(list(ctx.tags), themes=vocabulary)
+    return [t for t in candidates if _normalize_tag(t) not in set(registry.theme_keys())]
 
 
 class MocStage(PipelineStage):
@@ -2092,6 +2275,7 @@ def build_stages() -> list[PipelineStage]:
         TaggingStage(),
         TagsWrittenStage(),
         FormatterStage(),
+        LinkingStage(),
         MocStage(),
         CleanupStage(),
     ]
