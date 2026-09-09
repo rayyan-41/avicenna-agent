@@ -1554,10 +1554,16 @@ catches it rather than guessing.
 with overrides, the settings panel (generation values, provider/model, API keys).
 
 Done when: launch `avicenna`, trigger a generation, see the plan from
-`PlanApprovalRequested`, edit the topic or headings in the review screen, approve
-with overrides, and observe the pipeline use the overridden values (visible in
-`PreflightDeclared`'s output). Also: open settings, change the provider or
-model, and see the next run use the new configuration.
+`PlanApprovalRequested`, change words-per-heading or the agent in the review
+screen, approve with overrides, and observe the pipeline use the overridden
+values (visible in `PreflightDeclared`'s output). Also: open settings, change
+the provider or model, and see the next run use the new configuration.
+
+An earlier draft of this test said "edit the topic or headings", which
+contradicted section 2's decision that headings are **not** editable — editing
+one without re-running pre-flight leaves a plan that no longer describes what
+will be written. Section 2 governs; the overridable fields are the ones it
+lists.
 
 **Stage 4: the face.** The rendered face in idle and animated states.
 

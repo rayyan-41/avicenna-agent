@@ -1,8 +1,8 @@
 """Fail if the two halves of the wire protocol have drifted apart.
 
 The protocol is defined twice, in two languages: event dataclasses in
-`avicenna/events.py`, and the `EventName` union in `tui/src/protocol.ts`. The
-bridge serialises structurally, which is what makes adding an event cheap — and
+`avicenna/events.py`, and the `EventName` union in
+`tui/src/bridge/protocol.ts`. The bridge serialises structurally, which is what makes adding an event cheap — and
 also what makes an omission invisible. An event added on the Python side and
 forgotten on the TypeScript side crosses the wire, matches no case, and is
 dropped in silence.
@@ -23,8 +23,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 EVENTS_PY = ROOT / "avicenna" / "events.py"
-PROTOCOL_TS = ROOT / "tui" / "src" / "protocol.ts"
-APP_TS = ROOT / "tui" / "src" / "app.ts"
+PROTOCOL_TS = ROOT / "tui" / "src" / "bridge" / "protocol.ts"
+#: The event switch moved out of the render layer in the 2026-09-09 rewrite:
+#: translating an event into something drawable is pure, and keeping it pure is
+#: what lets the whole vocabulary be tested without a terminal.
+TRANSLATE_TS = ROOT / "tui" / "src" / "bridge" / "translate.ts"
 
 #: Not an event: the base class every event inherits from.
 BASE = "Event"
@@ -53,8 +56,8 @@ def typescript_events() -> set[str]:
 
 
 def handled_events() -> set[str]:
-    """Every event name with a `case` in the app's event switch."""
-    source = APP_TS.read_text(encoding="utf-8")
+    """Every event name with a `case` in translate.ts's applyEvent switch."""
+    source = TRANSLATE_TS.read_text(encoding="utf-8")
     return set(re.findall(r"case '([A-Za-z0-9_]+)':", source))
 
 
@@ -73,7 +76,7 @@ def main() -> int:
             f"{name}: declared in protocol.ts, has no dataclass in events.py"
         )
     for name in sorted(py & ts - handled):
-        problems.append(f"{name}: no `case '{name}':` in app.ts onEvent")
+        problems.append(f"{name}: no `case '{name}':` in translate.ts applyEvent")
 
     if problems:
         print("::error::Wire protocol parity check failed.")
@@ -81,8 +84,8 @@ def main() -> int:
             print(f"  {problem}")
         print(
             "\nAdding an event means three edits: the dataclass in "
-            "avicenna/events.py, the name in EventName in tui/src/protocol.ts, "
-            "and a case in App.onEvent."
+            "avicenna/events.py, the name in EventName in "
+            "tui/src/bridge/protocol.ts, and a case in translate.ts applyEvent."
         )
         return 1
 

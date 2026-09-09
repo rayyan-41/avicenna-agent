@@ -2,8 +2,14 @@
  * The wire contract with `python -m avicenna.bridge`.
  *
  * These declarations mirror avicenna/events.py and avicenna/bridge/server.py.
- * They are the frontend's only model of the backend, so anything the TUI
+ * They are the frontend's only model of the backend, so anything the interface
  * displays has to appear here first.
+ *
+ * `scripts/check_protocol_parity.py` reads the `EventName` union below and
+ * compares it against the Event subclasses in events.py, then checks that
+ * `translate.ts` carries a `case` for each. Adding an event on the Python side
+ * and forgetting it here would otherwise cross the wire, match nothing, and be
+ * dropped in silence.
  */
 
 export const PROTOCOL_VERSION = 1;
@@ -162,4 +168,37 @@ export interface ChatResult {
 export interface ValidateResult {
   ok: boolean;
   detail: string;
+}
+
+/* -- the client contract -------------------------------------------------- */
+
+/**
+ * What the rest of the interface is allowed to know about the bridge.
+ *
+ * Stated as an interface rather than a class so the render layer can be built
+ * and tested against a fake. The rule the old frontend held and this one keeps:
+ * nothing above this line imports a child process, and nothing below it knows
+ * what a transcript is.
+ */
+export interface BridgeClient {
+  /** Resolves once the backend has sent its `ready` frame. */
+  ready(): Promise<HelloResult>;
+
+  /** One request/response round trip. Rejects on a non-ok response. */
+  request<T>(method: string, params?: Record<string, unknown>): Promise<T>;
+
+  /** Every event frame, in arrival order. */
+  onEvent(listener: (frame: EventFrame) => void): void;
+
+  /**
+   * Fired when the connection is unusable: the child exited, or a line
+   * arrived that was not JSON. Both are fatal — see `client.ts` for why a
+   * desync must not be skipped.
+   */
+  onFatal(listener: (reason: string) => void): void;
+
+  /** Backend stderr, which is diagnostics rather than protocol. */
+  onDiagnostic(listener: (line: string) => void): void;
+
+  dispose(): void;
 }

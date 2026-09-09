@@ -207,47 +207,49 @@ jobs:
   # The interface is a separate toolchain, so it gets a separate job rather
   # than bolting Node onto the Python one.
   tui:
+    # Stays on ubuntu while the Python job stays on windows. The asymmetry is
+    # deliberate: the vault tools shell out to PowerShell, so the backend has to
+    # be proved on Windows; the frontend touches no shell and is cheaper here.
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Node 20
-        uses: actions/setup-node@v4
+      # Bun rather than Node: @opentui/core declares `bun >=1.3.0 || node
+      # >=26.4.0`, and node 26 is not a runner default. Node 20 installed it
+      # with an EBADENGINE warning and no guarantee.
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: tui/package-lock.json
+          bun-version: "1.4.0"
 
+      # --frozen-lockfile fails rather than quietly resolving a different tree,
+      # which is the whole point of committing the lockfile.
       - name: Install
         working-directory: tui
-        run: npm ci
+        run: bun install --frozen-lockfile
 
       - name: Type check
         working-directory: tui
-        run: npm run typecheck
+        run: bun run typecheck
 
       - name: Build
         working-directory: tui
-        run: npm run build
+        run: bun run build
 
       # This step did not exist. `npm test` was documented in three places and
       # run by nothing, so the frontend suite could rot without anyone noticing.
       - name: Tests
         working-directory: tui
-        run: npm test
+        run: bun test
 
-      # The skeleton is unstyled on purpose. Reintroducing a palette should be
-      # a deliberate design pass, not something that creeps back in a patch.
-      - name: Frontend stays unstyled
-        run: |
-          if grep -rnE "\\\\x1b\\[[0-9;]*m|\\\\u001b\\[[0-9;]*m" tui/src --include=*.ts \
-               | grep -v "ansi.ts" ; then
-            echo "::error::Raw SGR escape outside ansi.ts - style through ansi.ts or not at all."
-            exit 1
-          fi
-          echo "No raw colour escapes outside ansi.ts."
+      # The "Frontend stays unstyled" gate was deleted here on 2026-09-09. It
+      # existed to stop a palette creeping back into a skeleton that was
+      # deliberately bare, and this rewrite is that palette arriving on purpose
+      # -- so the gate had become a check that could only ever block the work it
+      # was written to protect. A check that must be deleted to make progress is
+      # not a gate any more.
 
   # Line endings and encodings are a stated invariant, and .gitattributes only
   # enforces them for people who cloned after it existed.
