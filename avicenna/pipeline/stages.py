@@ -5,19 +5,23 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from avicenna.events import (
-    LogMessage, ManifestWritten, MarkdownNormalised,
+    EntitiesDerived, LogMessage, ManifestWritten, MarkdownNormalised,
     MocUpdated, NoteWritten, PlanApprovalRequested, PreflightDeclared,
-    SchemaDetected, Stage,
+    SchemaDetected, Stage, TagsAssignedMechanically,
     TagsProposed, TagsValidated, ThemeMinted, TransitionsApplied,
     WordCountChecked,
 )
 from avicenna.pipeline.normalise import normalise_markdown
 from avicenna.pipeline.schema import FrontmatterSchema, detect_frontmatter_schema
 from avicenna.pipeline.structure import apply_structure
+from avicenna.pipeline.tagging import (
+    ParsedTags, assemble_tag_array, derive_entities,
+    parse_tagger_reply, repair_positional_tags,
+)
 from avicenna.pipeline.context import RunContext
 from avicenna.pipeline.delegate import delegate
 from avicenna.pipeline.preflight import PreflightError, parse_preflight
@@ -1296,18 +1300,24 @@ class TaggingStage(PipelineStage):
                     await ctx.emit(LogMessage, level="warning",
                                    text=f"could not load taxonomy registry: {exc}")
 
+        # Derive entities from the topic once; used when the model returns
+        # none and for the mechanical floor.
+        topic_entities = derive_entities(ctx.spec.topic)
+
         for attempt in range(1, 4):
             retry_detail = ""
             if attempt > 1 and ctx.handoffs.get("tagger_errors"):
                 retry_detail = f"\nPrevious validation errors: {ctx.handoffs['tagger_errors']}"
-            # Show the taxonomy hint (including registry state) on every
-            # attempt so the tagger sees current themes and types.
+            # Show the taxonomy hint on every attempt so the tagger sees
+            # current themes and types.
             taxonomy_hint = _taxonomy_hint(ctx) if attempt > 1 else ""
             tagger_payload = (
                 f"Note path: {ctx.note_path}\n"
-                "Reply with the tags on a single line beginning with 'TAGS:', "
-                "comma-separated, drawn only from the vault taxonomy.\n"
-                "Example:\nTAGS: philosophy, epistemology, revelation\n"
+                "Reply with the following labelled slots, one per line:\n"
+                "CATEGORY: <one category from the taxonomy>\n"
+                "TYPE: <one type from the taxonomy>\n"
+                "THEMES: <one to three themes, comma-separated>\n"
+                "ENTITIES: <zero to six proper nouns, comma-separated>\n"
                 f"{taxonomy_hint}{retry_detail}"
             )
             try:
@@ -1315,23 +1325,87 @@ class TaggingStage(PipelineStage):
             except Exception as exc:
                 await ctx.emit(LogMessage, level="error", text=f"tagger failed: {exc}")
                 break
-            tag_line = extract_tag_line(tagger_output)
-            if not tag_line:
+
+            # --- parse the reply ----------------------------------------
+            # Labelled slots first; fall back to positional TAGS: line and
+            # repair the ordering.
+            parsed = parse_tagger_reply(tagger_output)
+            if not parsed.labelled and not parsed.themes:
                 ctx.handoffs["tagger_errors"] = (
-                    "no 'TAGS:' line found; reply with exactly one line starting with TAGS:"
+                    "no labelled slots (CATEGORY:, TYPE:, THEMES:, ENTITIES:) "
+                    "and no TAGS: line found"
                 )
                 await ctx.emit(LogMessage, level="warning",
-                               text="tagger produced no TAGS: line")
+                               text="tagger produced no parseable output")
                 continue
-            await ctx.emit(TagsProposed, tags=tuple(
-                t.strip() for t in tag_line.split(",") if t.strip()
-            ))
 
-            # --- registry resolution -------------------------------------------
-            # Resolve themes and types against the registry BEFORE validation.
-            # Newly minted values are persisted to taxonomy.json so the
-            # vault's own validate_tags sees them.
-            resolved_line = await _resolve_tags_against_registry(tag_line, ctx)
+            # If the model used the positional TAGS: line, repair the
+            # ordering using taxonomy knowledge.
+            if not parsed.labelled and parsed.themes:
+                parsed = _repair_with_taxonomy(ctx, parsed)
+
+            # --- emit what the model proposed ----------------------------
+            proposed_tags: list[str] = []
+            if parsed.category:
+                proposed_tags.append(parsed.category)
+            if parsed.type_:
+                proposed_tags.append(parsed.type_)
+            proposed_tags.extend(parsed.themes)
+            proposed_tags.extend(parsed.entities)
+            if proposed_tags:
+                await ctx.emit(TagsProposed, tags=tuple(proposed_tags))
+
+            # --- derive entities when the model returned none ------------
+            entities_source: str = "model"
+            effective_entities = list(parsed.entities)
+            if not parsed.entities:
+                if topic_entities:
+                    effective_entities = topic_entities
+                    entities_source = "topic"
+                else:
+                    entities_source = "none"
+            await ctx.emit(EntitiesDerived, source=entities_source,
+                           entities=tuple(effective_entities))
+
+            # --- assemble the array --------------------------------------
+            taxonomy = getattr(ctx.spec.vault, "taxonomy", None)
+            # Not an assertion.  A stage that raises here aborts the whole run,
+            # and _repair_with_taxonomy two functions below already treats the
+            # same condition as survivable; an assert would also vanish under
+            # python -O, so the guard it looks like is not one.  Falling through
+            # reaches the deterministic floor, which is what this case is for.
+            if taxonomy is None or not ctx.domain:
+                await ctx.emit(
+                    LogMessage, level="warning",
+                    text="cannot assemble tags: vault has no taxonomy or no routed domain",
+                )
+                break
+            categories = ctx.spec.vault.categories_for_domain(ctx.domain)
+            types = list(taxonomy.types) if hasattr(taxonomy, "types") else []
+            markers = taxonomy.markers if hasattr(taxonomy, "markers") else ["cli"]
+            # Themes vocabulary: prefer registry, fall back to taxonomy.
+            registry = ctx.theme_registry
+            if registry is not None:
+                themes_vocab = registry.themes_for_hint()
+            else:
+                themes_vocab = list(taxonomy.themes) if hasattr(taxonomy, "themes") else []
+
+            assembled = assemble_tag_array(
+                domain=ctx.domain,
+                parsed=parsed,
+                categories=categories,
+                types=types,
+                themes_vocab=themes_vocab,
+                markers=markers,
+                derived_entities=effective_entities,
+            )
+
+            # --- registry resolution -------------------------------------
+            # Resolve themes and types against the registry BEFORE
+            # validation.  Newly minted values are persisted to
+            # taxonomy.json so the vault's own validate_tags sees them.
+            assembled_line = ", ".join(assembled)
+            resolved_line = await _resolve_tags_against_registry(assembled_line, ctx)
 
             result = await _invoke_optional(ctx, "validate_tags", TagLine=resolved_line)
             if result is None:
@@ -1354,9 +1428,10 @@ class TaggingStage(PipelineStage):
                     str(result.parsed.captures.get("reasons", token)) if result.parsed else token
                 )
                 await ctx.emit(TagsValidated, verdict="fail", message=ctx.handoffs["tagger_errors"])
+
         # --- deterministic floor: construct a minimal valid tag array ---------
         if not ctx.tags:
-            floor = _build_floor_tags(ctx)
+            floor = _build_floor_tags(ctx, derived_entities=topic_entities)
             if floor:
                 floor_line = ", ".join(floor)
                 result = await _invoke_optional(ctx, "validate_tags", TagLine=floor_line)
@@ -1365,21 +1440,51 @@ class TaggingStage(PipelineStage):
                     await ctx.emit(TagsValidated, verdict="pass",
                                    message="accepted floor tags unvalidated (validate_tags absent)",
                                    accepted=tuple(ctx.tags))
-                    await ctx.emit(LogMessage, level="warning",
-                                   text="TAGGER_UNRESOLVED: tags assigned mechanically from taxonomy (validate_tags absent)")
+                    await ctx.emit(TagsAssignedMechanically,
+                                   tags=tuple(floor),
+                                   reason="tagger failed; validate_tags absent")
                 elif result.parsed and result.parsed.token == "PASS":
                     ctx.tags = floor
                     await ctx.emit(TagsValidated, verdict="pass",
                                    message="accepted floor tags (mechanical assignment)",
                                    accepted=tuple(ctx.tags))
-                    await ctx.emit(LogMessage, level="warning",
-                                   text="TAGGER_UNRESOLVED after 3 attempts: tags assigned mechanically from taxonomy; correct this note")
+                    await ctx.emit(TagsAssignedMechanically,
+                                   tags=tuple(floor),
+                                   reason="tagger failed 3 attempts")
                 else:
                     await ctx.emit(LogMessage, level="error",
                                    text="TAGGER_UNRESOLVED after 3 attempts; floor tags also failed validation")
             else:
                 await ctx.emit(LogMessage, level="error",
                                text="TAGGER_UNRESOLVED after 3 attempts; cannot build floor tags (taxonomy incomplete)")
+
+
+def _repair_with_taxonomy(ctx: RunContext, parsed: ParsedTags) -> ParsedTags:
+    """Repair positional TAGS: ordering using taxonomy knowledge.
+
+    Called when the tagger used the legacy ``TAGS:`` line instead of labelled
+    slots.  Classifies each tag against the vault's taxonomy so the ordering
+    is corrected rather than trusted — the ordering is the thing that failed.
+    """
+    taxonomy = getattr(ctx.spec.vault, "taxonomy", None)
+    if taxonomy is None or not ctx.domain:
+        return parsed
+    categories = set(ctx.spec.vault.categories_for_domain(ctx.domain))
+    types = set(taxonomy.types) if hasattr(taxonomy, "types") else set()
+    registry = ctx.theme_registry
+    if registry is not None:
+        themes_vocab = set(registry.themes_for_hint())
+    else:
+        themes_vocab = set(taxonomy.themes) if hasattr(taxonomy, "themes") else set()
+    markers = set(taxonomy.markers) if hasattr(taxonomy, "markers") else {"cli"}
+    return repair_positional_tags(
+        parsed.themes,
+        domain=ctx.domain,
+        categories=categories,
+        types=types,
+        themes_vocab=themes_vocab,
+        markers=markers,
+    )
 
 
 def _taxonomy_hint(ctx: RunContext) -> str:
@@ -1409,13 +1514,13 @@ def _taxonomy_hint(ctx: RunContext) -> str:
         themes = list(taxonomy.themes) if hasattr(taxonomy, "themes") else []
     lines = [
         f"\nValid tags for the routed domain ({ctx.domain}):",
-        f"  Domain (exactly 1): {ctx.domain}",
-        f"  Category (exactly 1): {', '.join(all_cats)}" if all_cats else "  Category: (none available)",
-        f"  Type (exactly 1): {', '.join(types)}" if types else "  Type: (none available)",
-        f"  Themes (1-3): {', '.join(themes)}" if themes else "  Themes: (none available)",
-        "  Entities (0-6): open vocabulary",
-        "  cli must be the last tag.",
-        "The positional order is: domain, category, type, themes..., entities..., cli\n",
+        f"  CATEGORY: {', '.join(all_cats)}" if all_cats else "  CATEGORY: (none available)",
+        f"  TYPE: {', '.join(types)}" if types else "  TYPE: (none available)",
+        f"  THEMES: {', '.join(themes)}" if themes else "  THEMES: (none available)",
+        "  ENTITIES: zero to six proper nouns (open vocabulary)",
+        "",
+        "Reply with labelled slots, one per line.  The domain and marker are",
+        "handled by the harness — do not include them.\n",
     ]
     return "\n".join(lines)
 
@@ -1518,18 +1623,22 @@ async def _resolve_tags_against_registry(
     return ", ".join(resolved)
 
 
-def _build_floor_tags(ctx: RunContext) -> list[str]:
+def _build_floor_tags(
+    ctx: RunContext,
+    *,
+    derived_entities: Sequence[str] = (),
+) -> list[str]:
     """Construct a minimal valid tag array from the vault taxonomy.
 
     Returns [] when the taxonomy lacks the information needed to build one.
     The array follows the positional contract: [domain, category, type,
-    themes..., marker]. Never invents values — everything is drawn from the
-    taxonomy.
+    themes..., entities..., marker].  Never invents values — everything is
+    drawn from the taxonomy, except entities which come from topic derivation.
 
     Universal categories (like "moc") are EXCLUDED, not preferred.  An earlier
     version preferred them, which meant "moc" was chosen for every domain.
     Because update_moc.ps1 skips notes whose tags[1] is "moc"
-    (`if ($tags[1] -eq 'moc') { continue }`), tagging an ordinary note with
+    (``if ($tags[1] -eq 'moc') { continue }``), tagging an ordinary note with
     "moc" in position 1 silently un-lists it — the note ships but never enters
     its Map of Content.  The validator also rejects "moc" alongside a topical
     category in the same array.
@@ -1564,6 +1673,9 @@ def _build_floor_tags(ctx: RunContext) -> list[str]:
     floor: list[str] = [ctx.domain, category, types[0]]
     if themes:
         floor.append(themes[0])
+    # Entities from topic derivation — the floor fires when the model failed,
+    # which is exactly when connection is most at risk.
+    floor.extend(derived_entities[:6])
     # Exactly one marker, always the taxonomy's first.
     floor.append(markers[0])
     return floor

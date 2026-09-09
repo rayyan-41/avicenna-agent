@@ -148,7 +148,7 @@ def _main_script(system: str, messages: list[Any]) -> Completion:
     prompt = messages[-1].content if messages else ""
     if "pre-flight plan" in prompt or "JSON fence" in prompt:
         return Completion(text=_declaration())
-    if "TAGS:" in prompt:
+    if "labelled slots" in prompt:
         return Completion(text="Reviewed the note.\nTAGS: philosophy, epistemology, revelation")
     return Completion(text=BODY.strip())
 

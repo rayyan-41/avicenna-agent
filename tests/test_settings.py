@@ -63,7 +63,7 @@ def _script(system: str, messages: list[Any]) -> Completion:
     prompt = messages[-1].content if messages else ""
     if "pre-flight plan" in prompt or "JSON fence" in prompt:
         return Completion(text=_declaration())
-    if "TAGS:" in prompt:
+    if "labelled slots" in prompt:
         return Completion(text="Reviewed the note.\nTAGS: general, cli")
     if "genuinely related" in prompt:
         note = prompt.split("\n\n", 1)[-1]
@@ -253,7 +253,7 @@ class TestLengthNotEnforced:
             prompt = messages[-1].content if messages else ""
             if "pre-flight plan" in prompt or "JSON fence" in prompt:
                 return Completion(text=_declaration(target_words=9000))
-            if "TAGS:" in prompt:
+            if "labelled slots" in prompt:
                 return Completion(text="Reviewed.\nTAGS: general, cli")
             if "genuinely related" in prompt:
                 return Completion(text=prompt.split("\n\n", 1)[-1])
@@ -287,7 +287,7 @@ class TestLengthNotEnforced:
             prompt = messages[-1].content if messages else ""
             if "pre-flight plan" in prompt or "JSON fence" in prompt:
                 return Completion(text=_declaration(target_words=9000))
-            if "TAGS:" in prompt:
+            if "labelled slots" in prompt:
                 return Completion(text="Reviewed.\nTAGS: general, cli")
             if "genuinely related" in prompt:
                 return Completion(text=prompt.split("\n\n", 1)[-1])
@@ -382,7 +382,7 @@ class TestTimeouts:
             prompt = messages[-1].content if messages else ""
             if "pre-flight plan" in prompt or "JSON fence" in prompt:
                 return Completion(text=_declaration())
-            if "TAGS:" in prompt:
+            if "labelled slots" in prompt:
                 return Completion(text="Reviewed.\nTAGS: general, cli")
             if "genuinely related" in prompt:
                 return Completion(text=prompt.split("\n\n", 1)[-1])
