@@ -14,12 +14,17 @@ the interface feels broken during every interaction.
 
 The source image (`avicenna.png`, 1024×1024, RGB) is effectively two-tone.
 Verified measurements: 64.5% of pixels are pure `#000000`; a further 16.7% are
-near-black JPEG compression artifacts (values like `#000100`, `#010000`) that
-are visually indistinguishable from black. The remaining 18.8% are a single
-green averaging `#0BB926`, with the ten most common values all falling within
-`#0BB_26`–`#0CBD27`. There is no mid-tone, no anti-aliased edge, no gradient.
+near-black values (such as `#000100`, `#010000`, `#000001`) spread across 385
+distinct shades, each only ±1 in one or two channels from black. The cause of
+this spread is not established — the file is PNG (lossless), so compression
+artefacts are not the mechanism, and a colour-space round-trip or a lossy step
+earlier in the image's history is equally consistent with the data. The
+remaining 18.8% are a single green averaging `#0BB926`, with the ten most
+common values all falling within `#0BB_26`–`#0CBD27`. There is no mid-tone, no
+anti-aliased edge, no gradient. The near-black spread is irrelevant to the
+design: the luminance threshold (step 3 below) classifies all of it as dark.
 A luminance ramp (` .:;+*#@`) would therefore invent shading that is not in the
-source: it would map the JPEG noise floor to visible grey speckle and give the
+source: it would map the near-black spread to visible grey speckle and give the
 face a texture it does not have.
 
 **Half-block rendering with two colours is correct.** Each terminal cell
@@ -40,11 +45,10 @@ it — the source has no anti-aliased edges.
 **The pipeline, specified precisely:**
 
 1. **Crop.** The content bounding box within the source is (204, 88, 788, 964)
-   — verified as (202, 86, 789, 965) with a 2-pixel tolerance for JPEG edge
-   artefacts. This yields a content region of 584×876 pixels, a portrait aspect
-   ratio of 0.667. Rendering this region square (say, 34×34 cells) distorts the
-   face: the jaw stretches, the forehead compresses. The aspect ratio must be
-   preserved.
+   — verified as (202, 86, 789, 965) with a 2–3 pixel tolerance at the edges.
+   This yields a content region of 584×876 pixels, a portrait aspect ratio of
+   0.667. Rendering this region square (say, 34×34 cells) distorts the face: the
+   jaw stretches, the forehead compresses. The aspect ratio must be preserved.
 
 2. **Resample.** Resize the cropped region to the target cell width, with the
    height calculated to preserve aspect ratio and produce an even number of
@@ -56,9 +60,9 @@ it — the source has no anti-aliased edges.
 
 3. **Threshold.** A pixel is "lit" if its luminance exceeds 60 (Rec. 709
    coefficients: `0.2126R + 0.7152G + 0.0722B > 60`). This is a perceptual
-   threshold, not a channel check: it correctly classifies the near-black JPEG
-   artefacts as dark and the green silhouette as lit, without needing to know
-   the palette in advance.
+   threshold, not a channel check: it correctly classifies the near-black spread
+   as dark and the green silhouette as lit, without needing to know the palette
+   in advance.
 
 4. **Cell assignment.** For each column in each pair of rows, apply the table
    above. Empty columns (all cells in a column are spaces) are trimmed so the
@@ -192,25 +196,29 @@ foreground colour to every non-space character. The `meta` block records the
 parameters that produced the file, so a reader can verify the provenance
 without reading the generator.
 
-**The CI gate.** A new step in the `hygiene` job, after the existing MAP.md
-check:
+**The CI gate.** A new step in the `build` job, after the existing "No stray
+prints" step. The `build` job is the correct home because it runs on
+`windows-latest` and already executes `pip install -e ".[dev]"` (line 37 of
+`ci.yml`), so Pillow is available once it is declared as a dev dependency. The
+`hygiene` job is a bare checkout — it sets up Python 3.12 but never runs
+`pip install`, and its own comment says "this job is a bare checkout." A gate
+that imports Pillow would fail on its first run there.
 
 ```yaml
 - name: Face frames are up to date
-  shell: pwsh
-  run: |
-    python scripts/generate_face_frames.py --check
+  run: python scripts/generate_face_frames.py --check
 ```
 
 The `--check` flag regenerates the JSON to a temporary path and compares it
 byte-for-byte to the committed file. If they differ, the script exits 1 and
-prints the diff. The gate is in `hygiene` because it operates on source files,
-not on runtime behaviour, and because `hygiene` already runs on `ubuntu-latest`
-with Python available.
+prints the diff. The step runs in the `build` job alongside the other
+source-file gates (protocol parity, MAP.md parity via `hygiene`, vendor
+containment).
 
-Pillow is added to `[dev]` in `pyproject.toml` (one line: `"Pillow>=10.0"`).
-It is not a runtime dependency; it is needed only by the generator and by the
-gate.
+Pillow is not currently a dev dependency. `pyproject.toml` line 35 reads:
+`dev = ["pytest", "pytest-asyncio", "mypy", "types-PyYAML"]`. Adding Pillow
+requires a real change to that list: `"Pillow>=10.0"` appended. It is not a
+runtime dependency; it is needed only by the generator and by the gate.
 
 **Rejected alternative: a gate that checks only file hash.** A simpler gate
 would hash the committed JSON and compare it to a hash stored in the script.
@@ -238,15 +246,20 @@ sit, what they are made of, and how many gaze positions exist.
 
 **Pupil placement.** Two synthetic pupil regions, one per eye, specified as
 coordinates relative to the content bounding box so the placement survives a
-change of render size:
+change of render size. These centres are design proposals derived from the row
+analysis of the eye band, not precise measurements — the eye sockets are
+irregular shapes, and the "centre" is a judgement call about where a pupil
+looks most natural:
 
-- **Left eye.** The notch centre is at approximately 38% across the content
-  width and 44% down the content height. In the cell grid at34 cells wide, this
-  is cell column 13, row 11. At22 cells wide, cell column 8, row 7.
+- **Left eye.** The notch centre is proposed at approximately 38% across the
+  content width and 44% down the content height. In the cell grid at 34 cells
+  wide, this is cell column 13, row 11. At 22 cells wide, cell column 8,
+  row 7.
 
-- **Right eye.** The notch centre is at approximately 65% across the content
-  width and 44% down the content height. In the cell grid at34 cells wide, this
-  is cell column 22, row 11. At22 cells wide, cell column 14, row 7.
+- **Right eye.** The notch centre is proposed at approximately 65% across the
+  content width and 44% down the content height. In the cell grid at 34 cells
+  wide, this is cell column 22, row 11. At 22 cells wide, cell column 14,
+  row 7.
 
 These are the centre gaze positions. The pupils shift from here.
 
@@ -264,9 +277,12 @@ size (34 cells wide), each socket is approximately 5–6 cells wide, and the
 pupil is one cell — proportionally smaller, but the face is also farther from
 the viewer's focal point (it occupies more of the screen).
 
-**Gaze positions.** Five discrete positions, because continuous tracking is not
-possible on a cell grid and because fewer than five produces a mechanical
-oscillation rather than a natural glance:
+**Gaze positions.** The proposal is five discrete positions, because continuous
+tracking is not possible on a cell grid and because fewer than five produces a
+mechanical oscillation rather than a natural glance. The number five and the
+offset values are design choices, not measurements — they are chosen to give
+the pupil a visible range of motion at both render sizes without exceeding the
+socket boundaries:
 
 | Position | Label | Pupil offset from centre | Appearance |
 | --- | --- | --- | --- |
@@ -302,9 +318,12 @@ for the duration of the run. State changes are conveyed by the animation
 vocabulary (§3d), not by eye movement. Moving the eyes during state transitions
 would create two competing signals.
 
-**Blinking.** In scope. Every 4–6 seconds (randomised, uniform distribution),
-the pupils disappear for 0.15 seconds — the eye sockets return to solid ink.
-This is the only periodic animation in the interface. The blink timer is
+**Blinking.** In scope. The proposed timing is every 4–6 seconds (randomised,
+uniform distribution), with the pupils disappearing for 0.15 seconds — the eye
+sockets return to solid ink. These numbers are design proposals, not measured
+values; they are chosen to feel natural at typical terminal frame rates and
+should be tuned during implementation. This is the only periodic animation in
+the interface. The blink timer is
 frontend-only (a `setInterval` in the face component); it does not involve the
 backend or the event stream. Blinking is disabled when the terminal signals
 reduced-motion preference: the implementation checks for the `NO_COLOR`
@@ -336,8 +355,8 @@ indicators exist anywhere else. A later implementer must not add them.
 | State | Trigger(s) | Duration | Visual |
 | --- | --- | --- | --- |
 | **Idle** | No active run | Until a run starts | Large, centred. Eyes track the caret (§3c). Occasional blink. |
-| **Listening** | User sends a message (`chat.submit` called); ends when the response arrives | The silent pause — typically 2–10 seconds | Large, centred. Eyes shift to position 2 (centre). A slow pulse: the face dims from `phosphor` to a 70%-brightness variant over 1.2 seconds and back. This is the only visual feedback that the system heard the user. |
-| **Planning** | `RunStarted` fires; ends when `PreflightDeclared` fires | Typically 3–15 seconds | Large, centred (the face has not yet moved to the margin). Eyes shift to position 1 (left, toward the text block). Pulse continues but faster: 0.8-second cycle. |
+| **Listening** | User sends a message (`chat.submit` called); ends when the response arrives | The silent pause — typically 2–10 seconds | Large, centred. Eyes shift to position 2 (centre). A slow pulse: the face dims from `phosphor` to a 70%-brightness variant over 1.2 seconds and back (proposed timing — tune during implementation). This is the only visual feedback that the system heard the user. |
+| **Planning** | `RunStarted` fires; ends when `PreflightDeclared` fires | Typically 3–15 seconds | Large, centred (the face has not yet moved to the margin). Eyes shift to position 1 (left, toward the text block). Pulse continues but faster: 0.8-second cycle (proposed timing — tune during implementation). |
 | **Writing** | `SectionStarted` fires; persists through `SectionCompleted`/`SectionFailed` cycles until `RunComplete` or `RunFailed` | The bulk of the run — 2–20 minutes | Small, in the margin (§3e). Eyes at position 1 (left). The pulse stops — the face is static except for blinking. State transitions within this state (section completed, section failed) are shown in the text block's stage tree, not by face animation. The face's job during a run is to be a calm presence, not to mirror every event. |
 | **Complete** | `RunComplete` fires | 3 seconds, then returns to Idle | Small, in the margin. Eyes shift to position 2 (centre) — looking at the user. A single brightening: the face pulses to full brightness once, holds for 0.5 seconds, and settles. |
 | **Error** | `RunFailed` fires; also a `SectionFailed` with `will_retry=False` when no sections remain | Until the user dismisses or a new run starts | Small, in the margin. Eyes shift to position 2 (centre). The face does not pulse. The error is communicated by the text block (the `oxide`-coloured failure glyph and message); the face's stillness is the signal — the absence of the pulse that `Listening` and `Planning` use. |
@@ -408,14 +427,16 @@ sizes. The face is either large (34 cells wide, idle) or small (22 cells wide,
 running). If the terminal is resized during a run, the face re-renders at its
 current size; it does not interpolate.
 
-**The two-column layout and its minimum width.** The text block occupies56
+**The two-column layout and its minimum width.** The text block occupies 56
 columns (the `BLOCK` constant from the preview). The margin occupies whatever
 remains after the text block, the left rule (`U+258F`, 1 column), and inter-
 column spacing (3 columns). The small face (22 cells wide) sits in the margin's
 upper portion, with margin annotations (routing, tags, links) beside or below
 it.
 
-The minimum terminal width for the two-column layout is therefore:
+The minimum terminal width for the two-column layout is arithmetic from these
+constants — not a measured value, but a consequence of the layout dimensions
+chosen above:
 
 - Left padding: 2 columns
 - Left rule: 1 column
@@ -434,7 +455,8 @@ rendered frame that large, and the face at 34 cells wide in an 80-column
 terminal leaves only 46 columns for the text block — too narrow for comfortable
 reading.
 
-Below 60 columns (the text block width), the text block itself wraps. This is
+Below 60 columns (the text block width of 56 plus minimal padding), the text
+block itself wraps. This is
 a degenerate case — the interface is not designed for 50-column terminals — and
 the face is simply omitted. A face that is14 cells wide is mush, and mush is
 worse than nothing. The status line in the catchword area still reports the
