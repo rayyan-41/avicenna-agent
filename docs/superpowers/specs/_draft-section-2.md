@@ -38,23 +38,52 @@ The closed set, grouped by intent:
 
 | Pattern | Captures topic from |
 | --- | --- |
-| `write(?: me)? a note(?: on\|about)? (.+)` | the trailing noun phrase |
-| `generate (?:me )?a note(?: on\|about)? (.+)` | same |
-| `create (?:me )?a note(?: on\|about)? (.+)` | same |
-| `write about (.+)` | everything after "write about" |
-| `write on (.+)` | everything after "write on" |
-| `draft (?:me )?(?:a )?(?:note )?(?:on\|about)? (.+)` | the trailing noun phrase |
-| `compose (?:me )?(?:a )?(?:note )?(?:on\|about)? (.+)` | same |
+| `write(?: me)? a note(?: (?:on\|about))? (.+)` | the trailing noun phrase |
+| `generate (?:me )?a note(?: (?:on\|about))? (.+)` | same |
+| `create (?:me )?a note(?: (?:on\|about))? (.+)` | same |
+| `write (?:on\|about) (.+)` | everything after "write about" or "write on" |
+| `draft(?: me)? (?:a )?note (?:on\|about) (.+)` | topic after "draft a note on/about" |
+| `draft(?: me)? (?:on\|about) (.+)` | topic after "draft about" or "draft on" |
+| `draft(?: me)? (.+)` | bare topic after "draft" |
+| `compose(?: me)? (?:a )?note (?:on\|about) (.+)` | topic after "compose a note on/about" |
+| `compose(?: me)? (?:on\|about) (.+)` | topic after "compose about" or "compose on" |
+| `compose(?: me)? (.+)` | bare topic after "compose" |
 | `note (?:on\|about) (.+)` | the trailing noun phrase |
 
-That is eight patterns. A user who says any of these is asking for a note. The
-list is closed: adding a new verb means editing `intent.py` and its test file,
-not tuning a prompt.
+That is eleven patterns across eight verbs. Draft and compose each need three
+patterns because a single regex cannot distinguish "draft a note" as a
+structural phrase from "draft a note" where "note" is the start of the topic.
+The three-way split handles this: the first pattern requires "note" to be
+followed by a preposition ("on" or "about"), which makes "note" structural; the
+second handles a bare preposition without "note"; the third handles a bare
+topic. Pattern ordering matters: the specific "note" pattern is tried first so
+"draft a note about Kant" matches the first pattern (topic: "Kant") rather than
+the third (topic: "a note about Kant").
+
+The write, generate, and create patterns do not need this split because they
+require "a note" to be present in the verb phrase — a bare "write" without "a
+note" is handled by the separate "write on/about" pattern.
+
+Standard `re` module — no atomic groups or possessive quantifiers. The list is
+closed: adding a new verb means editing `intent.py` and its test file, not
+tuning a prompt.
 
 The patterns are tested against the full input string, not against a
 pre-processed token list, because the verb phrase matters to topic extraction —
 "write about Kant" yields topic "Kant" only if the regex captures the
-post-verb-phrase remainder.
+post-verb-phrase remainder. Verified against these inputs:
+
+| Input | Pattern | Topic |
+| --- | --- | --- |
+| `write a note on Kant` | write...a note | `Kant` |
+| `write a note about Kant` | write...a note | `Kant` |
+| `write a note Kant` | write...a note | `Kant` |
+| `write about Kant` | write on/about | `Kant` |
+| `draft Kant` | draft | `Kant` |
+| `draft a note about Kant` | draft...note | `Kant` |
+| `compose Kant` | compose | `Kant` |
+| `note on Kant` | note | `Kant` |
+| `I was going to write about Kant but I got distracted.` | (none) | not classified |
 
 #### Near-misses
 
@@ -87,6 +116,25 @@ cost.
 One edge case deserves a rule: a slash command that starts with `/` is never
 classified by intent routing. It is dispatched by the command catalogue first.
 This prevents `/agent write` from being misclassified as a note request.
+
+**Where this pattern set knowingly departs from its own principle.** The bare
+`draft (.+)` and `compose (.+)` patterns match anything following those verbs at
+the start of a message. Tested: "draft an email to my boss" proposes a note on
+"an email to my boss", and "compose a reply to this thread" proposes one on "a
+reply to this thread". Both are false positives, in a design that has just
+argued false positives are the expensive direction.
+
+They are kept for two reasons. The bare form is the natural way to ask this
+program for a note — "draft Kant" — and dropping it to protect against a use
+that is not what Avicenna is for would cost the common case to defend the rare
+one. And the confirm step means a false positive here costs one keystroke rather
+than a run: nothing is generated until the user accepts the proposal.
+
+That second reason is doing the real work, and it is worth stating plainly,
+because it means the confirm step is not a convenience. **It is the safety
+mechanism that lets the pattern set be permissive at all.** If a later change
+ever makes generation start without confirmation, these two patterns must be
+removed in the same change.
 
 #### Failure modes
 
@@ -324,6 +372,27 @@ env var or `user_config.json`, but there is no `providers.list` method on
 the bridge and no way to change the model from the TUI. The settings panel
 requires both.
 
+**Pre-existing defect: `persist_key` resets provider and model.**
+`auth.py`'s `persist_key` calls `cfg.update(onboarded=True,
+provider=DEFAULT_PROVIDER, model=DEFAULT_MODEL, key_store=store)` on every
+key save (line 75). This overwrites the user's provider and model choices
+with the hardcoded defaults (`mistral`, `mistral-large-latest`) every time
+they re-enter their API key. The layered-configuration spec (2026-09-06)
+explicitly says "`persist_key` stops writing `provider` and `model`" — the
+code has not been updated to match.
+
+The settings panel is where a user would hit this: they change their model
+to something other than the default, re-enter their API key (perhaps to
+switch keys), and their model choice silently reverts. The panel's design
+must account for this. The fix is in `auth.py` itself — `persist_key` should
+record only `onboarded`, `key_store`, and optionally `default_vault`, leaving
+`provider` and `model` untouched — but the panel must also not assume the fix
+is in place. When the panel detects that `persist_key` would overwrite
+`provider` or `model` (by comparing the current values against the defaults),
+it should warn the user before submitting the key, or split the key-save
+path into a call that writes only the key. **This is a backend fix, not a
+frontend workaround**, but the panel cannot silently inherit the bug.
+
 #### API key entry
 
 This is the part that needs care.
@@ -364,11 +433,20 @@ means:
 4. **On validation failure.** `auth.validate` returns `{ok: false, detail:
    "Key rejected. Check for a typo or an expired key."}`. The detail is
    human-readable and never includes the key. The panel shows the detail in
-   `oxide` (the failure colour, per the palette) with the `U+00D7` glyph
-   (the refusal signal, per the glyph rules). The key is not echoed back for
-   "correction" — the user must retype it, which is the correct trade: a
-   slightly slower retry against the guarantee that the wrong key never
-   appeared on screen.
+   `oxide` (the failure colour, per the palette) with a refusal mark. The key
+   is not echoed back for "correction" — the user must retype it, which is the
+   correct trade: a slightly slower retry against the guarantee that the wrong
+   key never appeared on screen.
+
+   **Glyph note.** The shared context's "three state glyphs only" rule
+   (`U+2713`, `U+25B8`, `U+00B7`) governs the run display's stage tree — the
+   progress surface where pending, running, and done must be distinguishable at
+   a glance. Input masking and error marks are a different job and use different
+   glyphs: `U+2022` (bullet) for masked password input, and `U+00D7`
+   (multiplication sign) for validation refusal. Both are standard terminal
+   glyphs for their respective purposes and do not conflict with the stage-tree
+   rule, which was written for the run surface and does not exhaust the
+   interface's glyph repertoire.
 
 5. **The input flow.** The user enters the settings panel, navigates to the
    API key field, and types. On submit, the frontend calls `auth.validate`.
@@ -387,11 +465,12 @@ exist.
 
 #### The existing catalogue
 
-`tui/src/commands.ts` defines 16 commands (14 visible, 2 hidden):
+`tui/src/commands.ts` defines 17 commands (16 visible, 1 hidden — `/exit` is
+the only entry carrying `hidden: true`):
 
 `/help`, `/note`, `/dry`, `/resume`, `/cancel`, `/agent`, `/agents`, `/route`,
 `/vault`, `/tools`, `/mcp`, `/init`, `/login`, `/clear`, `/diagnostics`,
-`/quit` (plus `/exit` hidden).
+`/quit`, `/exit` (hidden).
 
 #### What survives the rewrite
 
