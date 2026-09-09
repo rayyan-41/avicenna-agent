@@ -134,17 +134,22 @@ tells the user how to install it and how to run headless instead.
 
 ### The rewrite
 
-`tui/` is rebuilt from scratch. No file is ported. Two behaviours of the current
-`bridge.ts` must nonetheless be preserved, because they were learned rather than
-designed and rediscovering them costs a day:
+`tui/` is rebuilt from scratch. No file is ported. Two things about the current
+`bridge.ts` nonetheless carry into the new client, and they are not the same
+kind of thing — an earlier draft of this section wrongly described both as
+existing behaviour to preserve:
 
-- a stdout chunk may split a JSON line, so the reader buffers partial lines
-  across chunk boundaries;
-- a non-JSON line on stdout is a fatal desync, not a line to skip — this is the
-  frontend half of the rule that stdout belongs to the wire protocol.
+- **Preserved.** A stdout chunk may split a JSON line, so the reader buffers
+  partial lines across chunk boundaries. `bridge.ts` does this today, it was
+  learned rather than designed, and rediscovering it costs a day.
+- **Corrected.** A non-JSON line on stdout should be a fatal desync rather than
+  a line to skip — the frontend half of the rule that stdout belongs to the wire
+  protocol. `bridge.ts` does **not** do this today: on a parse failure it calls
+  `diagnose()` and continues. So this is a fix the rewrite must make, not a
+  behaviour it must keep.
 
 Both go into the new client with the reasoning recorded in comments, per the
-house style.
+house style, and the second carries a test asserting the frame is fatal.
 
 ```
 tui/
